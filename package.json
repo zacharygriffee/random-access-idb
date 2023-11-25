@@ -13,7 +13,7 @@
   "dependencies": {
     "b4a": "^1.6.4",
     "lodash-es": "^4.17.21",
-    "random-access-storage": "^3.0.1",
+    "random-access-storage": "^3.0.1"
   },
   "devDependencies": {
     "brittle": "^3.3.2"
