@@ -6,7 +6,7 @@
   "browser": "index.js",
   "description": "A rework of random-access-idb",
   "homepage": "https://github.com/zacharygriffee/random-access-idb#readme",
-  "license": "MIT",
+  "license": "BSD",
   "scripts": {
     "test": "node ./test.js"
   },
