@@ -3,6 +3,7 @@ import {isFunction, isObject, once} from "./lib/dash.js";
 import b4a from "b4a";
 import {blocks} from "./lib/blocks.js";
 import {isNode} from "./lib/isNode.js";
+import {getIdb} from "./lib/getIdb.js";
 
 const DELIM = '\0';
 
