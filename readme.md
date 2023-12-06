@@ -17,10 +17,12 @@ Differences:
 # example
 
 ``` ecmascript 6
-import {RAI} from "@zacharygriffee/random-access-idb";
-// OR I've also added a default export.
-import RandomAccessIdb from "@zacharygriffee/random-access-idb";
-import b4a from "b4a"; 
+// Added reexport of b4a since this library uses it 
+import {RAI, b4a} from "@zacharygriffee/random-access-idb";
+// Or I've also added a default export.
+import RandomAccessIdb, {b4a} from "@zacharygriffee/random-access-idb";
+// Or import b4a.
+import b4a from "b4a";
 
 const random = RAI('dbname')
     const cool = random('cool.txt')
