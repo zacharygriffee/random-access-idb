@@ -202,4 +202,4 @@ function backify (r, cb) {
 }
 
 // Convenience
-export {RandomAccessIndexedDB as RAI, RandomAccessIndexedDB as default};
+export {RandomAccessIndexedDB as RAI, RandomAccessIndexedDB as default, b4a};
