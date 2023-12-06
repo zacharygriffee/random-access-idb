@@ -13,7 +13,7 @@ export function RandomAccessIndexedDB(dbname, xopts = {}) {
     }
 
     const {
-        idb = window.indexedDB || getIdb()
+        idb = getIdb()
     } = xopts;
 
     if (!idb) throw new Error('Browser does not support indexedDB.')
