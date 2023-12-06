@@ -20,14 +20,15 @@ Differences:
 import {RAI} from "@zacharygriffee/random-access-idb";
 // OR I've also added a default export.
 import RandomAccessIdb from "@zacharygriffee/random-access-idb";
+import b4a from "b4a"; 
 
 const random = RAI('dbname')
     const cool = random('cool.txt')
-            cool.write(100, new Buffer('GREETINGS'), function (err) {
+            cool.write(100, b4a.from('GREETINGS'), function (err) {
         if (err) return console.error(err)
             cool.read(104, 3, function (err, buf) {
         if (err) return console.error(err)
-            console.log(buf.toString()) // TIN
+            console.log(b4a.toString(buf)) // TIN
     })
 })
 ```
