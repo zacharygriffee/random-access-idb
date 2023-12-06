@@ -4,7 +4,7 @@
 
 [1]: https://github.com/random-access-storage/random-access-storage
 
-### This is a modification of the original ['random-access-idb'](https://www.npmjs.com/package/random-access-idb). 
+### This is a modification of the original [random-access-idb](https://www.npmjs.com/package/random-access-idb). 
 
 Differences:
 
