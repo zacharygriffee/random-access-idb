@@ -11,7 +11,7 @@ Differences:
 - Uses [`b4a`](https://www.npmjs.com/package/b4a) for buffer stuff.
 - Does not close the db after use. If your application is ephemeral it not really worrisome.
 - Modernize to ecmascript 6
-- Run in webworker
+- Webworker compatible
 
 
 
