@@ -1,22 +1,19 @@
 {
   "name": "@zacharygriffee/random-access-idb",
   "type": "module",
-  "version": "1.0.1",
+  "version": "2.0.0",
   "main": "index.js",
   "browser": "index.js",
   "description": "A rework of random-access-idb",
   "homepage": "https://github.com/zacharygriffee/random-access-idb#readme",
-  "license": "BSD",
+  "license": "MIT",
   "scripts": {
     "test": "node ./test.js"
   },
   "dependencies": {
     "b4a": "^1.6.4",
-    "lodash-es": "^4.17.21",
+    "dexie": "^3.2.4",
     "random-access-storage": "^3.0.1"
-  },
-  "devDependencies": {
-    "brittle": "^3.3.2"
   },
   "exports": {
     "default": "./index.js",

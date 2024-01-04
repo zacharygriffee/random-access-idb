@@ -1,74 +1,97 @@
 # random-access-idb
 
+---
+
+### [API Documentation](https://github.com/zacharygriffee/random-access-idb/blob/overhaul/api.md#RandomAccessIdb)
+
 [random-access-storage][1] compatible indexedDB storage layer
 
 [1]: https://github.com/random-access-storage/random-access-storage
 
-### This is a modification of the original [random-access-idb](https://www.npmjs.com/package/random-access-idb). 
+### This is a complete rework of the original random-access-idb. 
 
 Differences:
 
 - Uses [`b4a`](https://www.npmjs.com/package/b4a) for buffer stuff.
-- Does not close the db after use. If your application is ephemeral it not really worrisome.
-- Modernize to ecmascript 6
-- Webworker compatible
+- Uses [`dexie`](https://dexie.org/docs/Dexie/Dexie) for indexeddb handling
 
+---
 
+## Installation
 
-# example
-
-``` ecmascript 6
-// Added reexport of b4a since this library uses it 
-import {RAI, b4a} from "@zacharygriffee/random-access-idb";
-// Or I've also added a default export.
-import RandomAccessIdb, {b4a} from "@zacharygriffee/random-access-idb";
-// Or import b4a.
-import b4a from "b4a";
-
-const random = RAI('dbname')
-    const cool = random('cool.txt')
-            cool.write(100, b4a.from('GREETINGS'), function (err) {
-        if (err) return console.error(err)
-            cool.read(104, 3, function (err, buf) {
-        if (err) return console.error(err)
-            console.log(b4a.toString(buf)) // TIN
-    })
-})
+```sh
+npm install @zacharygriffee/random-access-idb --save
 ```
 
-# api
+## Import
 
 ``` ecmascript 6
-import {RAI} from "@zacharygriffee/random-access-idb";
+import RAI from "@zacharygriffee/random-access-idb";
+
+// or
+
+import {openDatabase} from "@zacharygriffee/random-access-idb";
+```
+---
+# Example
+
+> When you need complex solutions
+
+``` ecmascript 6
+    import {openDatabase} from "@zacharygriffee/random-access-id";
+    
+    // Always open the database with the same chunksize it was created with.
+    const margaritaDb = openDatabase("margarita", { chunkSize: 1024 });
+    const martiniDb = openDatabase("martini", { chunkSize: 512 );
+    
+    const goldenMargarita = margaritaDb("goldenMargarita.txt");
+    goldenMargarita.write(0, b4a.from("add orange juice"), (e) => {
+        goldenMargarita.read(4, 6, (e, buffer) => {
+            b4a.toString(buffer); // orange
+        })
+    });
+    
+    const dryGinMartini = martiniDb("dryGinMartini.txt");
+    
+    dryGinMartini.write(0, b4a.from("less vermouth"), (e) => {
+            dryGinMartini.read(5, 8, (e, buffer) => {
+            b4a.toString(buffer); // vermouth
+        })
+    });
+    
 ```
 
-## const db = RAI(dbname, opts)
+# Simple Example
 
-Open an indexedDB database at `dbname`.
+> When your life is simple and don't need all that extra stuff.
+``` ecmascript 6
+    import rai from "@zacharygriffee/random-access-id";
+    
+    // default export is like calling openDatabase('rai')("hello.txt");
+    const file = rai("hello.txt");
+    file.write(0, b4a.from("hello world"), (e) => {
+        file.read(0, 5, (e, buffer) => {
+            b4a.toString(buffer); // hello
+        })
+    });
+```
 
-    Any `opts` provided are forwarded to `db(name, opts)` as default options.
+---
 
-## const file = db(name, opts)
+# Todo
 
-Create a handle `file` from `name` and `opts`:
+```ecmascript 6
+/**
+     todo: add a file metadata for stats
+           like block size (chunk size) as to ensure
+           a file is always opened with
+           its original block size
+           among other stats.
+    
+     todo: Error handling testing. Currently, unlikely
+           indexeddb errors have not been tested
+*/
+```
 
-* `opts.size` - internal chunk size to use (default 4096)
+Distributed under the MIT license. See ``LICENSE`` for more information.
 
-You must keep `opts.size` the same after you've written data.
-If you change the size, bad things will happen.
-
-## file.read(offset, length, cb)
-
-Read `length` bytes at an `offset` from `file` as `cb(err, buf)`.
-
-## file.write(offset, buf, cb)
-
-Write `buf` to `file` at an `offset`.
-
-# install
-
-npm install @zacharygriffee/random-access-idb
-
-# license
-
-BSD

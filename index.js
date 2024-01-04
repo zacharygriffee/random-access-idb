@@ -1,205 +1,424 @@
-import RandomAccess from "random-access-storage";
-import {isFunction, isObject, once} from "./lib/dash.js";
-import b4a from "b4a";
+import Dexie from "dexie";
+import RandomAccessStorage from "random-access-storage";
 import {blocks} from "./lib/blocks.js";
-import {isNode} from "./lib/isNode.js";
-import {getIdb} from "./lib/getIdb.js";
+import b4a from "b4a";
 
-const DELIM = '\0';
+// todo: add a file metadata for stats
+//       like block size (chunk size) as to ensure
+//       a file is always opened with
+//       its original block size
+//       among other stats.
+//
+// todo: Error handling testing. Currently, unlikely
+//       indexeddb errors have not been tested
 
-export function RandomAccessIndexedDB(dbname, xopts = {}) {
-    if (isNode()) {
-        throw new Error("Must be ran in browser");
-    }
+/**
+ * Current default configurations.
+ * @type {{chunkSize: number, MapClass: MapConstructor}}
+ */
+export let defaultConfig = {
+    chunkSize: 4096, MapClass: Map
+};
 
+/**
+ * Update default configurations for all further database creations.
+ *
+ * @example
+ * updateDefaultConfig(existingConfig => ({...existingConfig, chunkSize: 1024, MapClass: ObservableMap}));
+ *
+ * @param cb
+ * @returns {Promise<void>}
+ */
+export function updateDefaultConfig(cb) {
+    return Promise.resolve(cb(defaultConfig)).then((changedConfig) => {
+        defaultConfig = changedConfig;
+    })
+}
+
+/**
+ * Create an indexeddb database entry
+ *
+ * @example // File creation example
+ *
+ * const fileMaker = create();
+ * const rai = fileMaker("helloWorld.txt");
+ * rai.write(0, Buffer.from("hello world!!!"));
+ *
+ * @param [dbName="rai"] The name of the database
+ * @param [config] Optional configurations
+ * @param [config.chunkSize=4096] The chunk size of the file stored in the database. This cannot be changed once set and
+ * if you reopen the database, it should have the same size it was created with.
+ * @param [config.size=4096] Alias of {@link config.chunkSize}
+ * @returns Function<RandomAccessIdb>
+ */
+export function openDatabase(dbName = "rai", config = {}) {
+    if (typeof config === "number") config = {chunkSize: config};
+    const MapClass = defaultConfig.MapClass;
     const {
-        idb = getIdb()
-    } = xopts;
 
-    if (!idb) throw new Error('Browser does not support indexedDB.')
+        size,
+        chunkSize = size || defaultConfig.chunkSize
+    } = config;
 
-    let db = null;
-    let dbqueue = [];
+    if (!RandomAccessIdb.loadedFiles) RandomAccessIdb.loadedFiles = new MapClass();
+    const db = new Dexie(dbName);
 
-    if (isFunction(idb.open)) {
-        const req = idb.open(dbname);
-        req.addEventListener('upgradeneeded', () => {
-            db = req.result
-            db.createObjectStore('data')
-        })
-        req.addEventListener('success', () => {
-            db = req.result
-            dbqueue.forEach(cb => { cb(db) })
-            dbqueue = null
-        })
-    } else {
-        db = idb
-    }
+    maker.db = db;
+    return maker;
 
-    return (name, opts) => {
-        if (isObject(name)) {
-            opts = name
-            name = opts.name
+    /**
+     * Creates the random access storage instance of a file.
+     * @param fileName
+     * @returns {RandomAccessIdb} RandomAccessIdb class instance
+     */
+    function maker(fileName) {
+        const key = dbName + "#" + fileName + "#length";
+        if (RandomAccessIdb.loadedFiles.has(key)) {
+            return RandomAccessIdb.loadedFiles.get(key);
         }
 
-        if (!opts) opts = {}
-        opts.name = name
+        if (!(this instanceof RandomAccessIdb)) {
+            return maker.call(new RandomAccessIdb(), fileName);
+        }
 
-        return new Store(Object.assign({ db: getdb }, xopts, opts))
-    }
+        db.version(1).stores({
+            [fileName]: '++chunk,data'
+        });
 
-    function getdb (cb) {
-        if (db) setTimeout(() => cb(db))
-        else dbqueue.push(cb)
+        const instance = Object.defineProperties(this, {
+            length: {
+                get() {
+                    return Number(localStorage.getItem(key) || 0);
+                }, set(newLength) {
+                    if (newLength === 0) return localStorage.removeItem(key);
+                    localStorage.setItem(key, newLength);
+                }
+            }, fileName: {
+                get() {
+                    return fileName
+                }
+            }, db: {
+                get() {
+                    return db
+                }
+            }, table: {
+                get() {
+                    return db[fileName];
+                }
+            }, chunkSize: {
+                get() {
+                    return chunkSize;
+                }
+            }, dbName: {
+                get() {
+                    return dbName;
+                }
+            }
+        });
+
+        RandomAccessIdb.loadedFiles.set(key, instance);
+        return instance;
     }
 }
 
-class Store extends RandomAccess {
-    constructor(opts = {}) {
-        const {
-            size = 4096,
-            name,
-            length = 0,
-            db
-        } = opts;
-
-        super();
-
-        this.size = size;
-        this.name = name;
-        this.length = length;
-        this._getdb = db;
-    }
+/**
+ * @class RandomAccessIdb
+ * @extends RandomAccessStorage
+ * @see https://github.com/random-access-storage/random-access-storage
+ * @see https://dexie.org/docs/Dexie/Dexie
+ * @see https://dexie.org/docs/Table/Table
+ * @property {Number} length
+ * Total length of the file
+ * @property {String} fileName
+ * The fileName of the file
+ * @property {Dexie} db
+ * The db this file is created under.
+ * @property {Dexie.Table} Table
+ * The table in the db this file is created.
+ * @property {number} chunkSize
+ * The chunk size this file is stored on the database.
+ * @property {string} dbName
+ * The database name this file is stored on.
+ */
+class RandomAccessIdb extends RandomAccessStorage {
+    static loadedFiles;
 
     _blocks(i, j) {
-        return blocks(this.size, i, j)
+        const {
+            chunkSize
+        } = this;
+        return blocks(chunkSize, i, j)
     }
 
-    _read(req) {
-        const self = this;
-        const buffers = [];
-        self._store('readonly', (err, store) => {
-            if ((self.length || 0) < req.offset + req.size) {
-                return req.callback(new Error('Could not satisfy length'), null)
-            }
-            if (err) return req.callback(err)
-            const offsets = self._blocks(req.offset, req.offset + req.size);
-            let pending = offsets.length + 1;
-            const firstBlock = offsets.length > 0 ? offsets[0].block : 0;
-            for (let i = 0; i < offsets.length; i++) (o => {
-                const key = self.name + DELIM + o.block;
-                backify(store.get(key), (err, ev) => {
-                    if (err) return req.callback(err)
-                    buffers[o.block - firstBlock] = ev.target.result
-                        ? b4a.from(ev.target.result.subarray(o.start, o.end))
-                        : b4a.alloc(o.end - o.start)
-                    if (--pending === 0) req.callback(null, b4a.concat(buffers))
-                })
-            })(offsets[i])
-            if (--pending === 0) req.callback(null, b4a.concat(buffers))
-        })
+    async __open() {
+        const {
+            db
+        } = this;
+        if (!db.isOpen()) await db.open();
     }
 
-    _write(req) {
-        const self = this;
-
-        if (!b4a.isBuffer(req.data))
-            req.data = b4a.from(req.data);
-
-        self._store('readwrite', (err, store) => {
-            if (err) return req.callback(err)
-            const offsets = self._blocks(req.offset, req.offset + req.data.length);
-            let pending = 1;
-            const buffers = {};
-            for (let i = 0; i < offsets.length; i++) ((o, i) => {
-                if (o.end - o.start === self.size) return
-                pending++
-                const key = self.name + DELIM + o.block;
-                backify(store.get(key), (err, ev) => {
-                    if (err) return req.callback(err)
-                    buffers[i] = b4a.from(ev.target.result || b4a.alloc(self.size))
-                    if (--pending === 0) write(store, offsets, buffers)
-                })
-            })(offsets[i], i)
-            if (--pending === 0) write(store, offsets, buffers)
-        })
-
-        function write (store, offsets, buffers) {
-            let block;
-            let i = 0, j = 0;
-            for (; i < offsets.length; i++) {
-                const o = offsets[i];
-                const len = o.end - o.start;
-                if (len === self.size) {
-                    block = b4a.from(req.data.slice(j, j + len))
-                } else {
-                    block = buffers[i]
-                    b4a.copy(req.data, block, o.start, j, j + len);
-                }
-                store.put(block, self.name + DELIM + o.block)
-                j += len
-            }
-
-            const length = Math.max(self.length || 0, req.offset + req.data.length);
-            store.put(length, self.name + DELIM + 'length')
-            store.transaction.addEventListener('complete', () => {
-                self.length = length
-                req.callback(null)
-            })
-            store.transaction.addEventListener('error', err => {
-                req.callback(err)
-            })
+    async _open(req) {
+        try {
+            await this.__open();
+            req.callback(null, null);
+        } catch (e) {
+            req.callback(e);
         }
     }
 
-    _del(req) {
-        req.callback();
+    async _read(req) {
+        let {
+            offset, size
+        } = req;
+
+        if (size === 0) return req.callback(null, b4a.alloc(0));
+
+        const {
+            table, length, chunkSize
+        } = this;
+
+        await this.__open();
+
+        if (length === 0) {
+            const error = new Error("No file");
+            error.code = "ENOENT";
+            return req.callback(error, null);
+        }
+        if (size === Number.POSITIVE_INFINITY) size = offset + length;
+
+        if ((length || 0) < offset + size) {
+            return req.callback(new Error('Could not satisfy length'))
+        }
+
+        const blocks = this._blocks(offset, offset + size);
+        const [{block: firstBlock}] = blocks;
+        const [{block: lastBlock}] = [...blocks].reverse();
+
+        let cursor = 0;
+        try {
+            const bufferObject = (await table.where("chunk")
+                .between(firstBlock, lastBlock, true, true)
+                .toArray())
+                .reduce((acc, {data, chunk}) => {
+                    cursor = chunk - firstBlock;
+                    const {start, end} = blocks[cursor];
+                    acc[chunk] = b4a.from(data.slice(start, end));
+                    return acc;
+                }, {});
+
+
+            req.callback(null, b4a.concat(blocks.map((o) => bufferObject[o.block] || b4a.alloc(chunkSize))));
+        } catch (e) {
+            req.callback(e);
+        }
     }
 
-    _store(mode, cb) {
-        cb = once(cb)
-        const self = this;
-        self._getdb(db => {
-            const tx = db.transaction(['data'], mode);
-            const store = tx.objectStore('data');
-            tx.addEventListener('error', cb)
-            cb(null, store)
-        })
-    }
+    async _write(req) {
+        const {
+            table, chunkSize, length, db
+        } = this;
 
-    _open(req) {
-        const self = this;
-        this._getdb(db => {
-            self._store('readonly', (err, store) => {
-                if (err) return req.callback(err)
-                backify(store.get(self.name + DELIM + 'length'), (err, ev) => {
-                    if (err) return req.callback(err)
-                    self.length = ev.target.result || 0
-                    req.callback(null)
-                })
+        const {
+            offset, data
+        } = req;
+
+        await this.__open();
+
+        const blocks = this._blocks(offset, offset + data.length);
+        const [{block: firstBlock}] = blocks;
+        const [{block: lastBlock}] = [...blocks].reverse();
+        let newLength;
+
+        db.transaction("readwrite", table,
+            async function () {
+                const chunks = (await table.where("chunk")
+                    .between(firstBlock, lastBlock, true, true)
+                    .toArray())
+                    .map(({data}) => data);
+
+                let cursor = 0;
+                let i = 0;
+                const ops = [];
+
+
+                for (const {block, start, end} of blocks) {
+                    const blockPos = i++;
+                    const blockRange = end - start;
+
+                    if (blockRange === chunkSize) {
+                        chunks[blockPos] = b4a.from(data.slice(cursor, cursor + blockRange));
+                    } else {
+                        chunks[blockPos] ||= b4a.from(b4a.alloc(chunkSize));
+                        b4a.copy(b4a.from(data), chunks[blockPos], start, cursor, cursor + blockRange);
+                    }
+
+                    ops.push({chunk: block, data: b4a.from(chunks[blockPos])});
+
+                    cursor += blockRange;
+                }
+
+                newLength = Math.max(length || 0, offset + data.length);
+                await table.bulkPut(ops);
             })
-        })
+            .then(() => {
+                this.length = newLength;
+                req.callback(null);
+            }).catch(e => {
+            req.callback(e);
+        });
+
     }
 
-    _close(req) {
-        this._getdb(db => {
-            //db.close() // TODO: reopen gracefully. Close breaks with corestore, as innercorestore closes the db
-            req.callback()
-        })
+    async _del(req) {
+        let {
+            offset, size
+        } = req;
+
+        const {
+            length, table, chunkSize
+        } = this;
+
+        await this.__open();
+
+        if (size === Number.POSITIVE_INFINITY) size = req.size = length - offset;
+
+        if (offset + size > length) {
+            size = req.size = Math.max(0, length - offset)
+        }
+
+        if (offset + size >= length) {
+            return this._truncate(req);
+        }
+
+        const blocks = this._blocks(offset, offset + size);
+        const firstBlock = blocks.shift();
+        const lastBlock = blocks.pop() || firstBlock;
+        const deleteBlockCount = lastBlock.block - firstBlock.block;
+
+        if (deleteBlockCount > 1) {
+            // Delete anything in between.
+            await table.where("chunk")
+                .between(firstBlock.block, lastBlock.block, false, false)
+                .delete();
+        }
+
+        // handle the edges
+        const [first, last] = await table.where("chunk")
+            .between(firstBlock.block, lastBlock.block, true, true)
+            .toArray();
+
+
+        if (first) {
+            const end = last ? firstBlock.end : firstBlock.end - firstBlock.start;
+            const empty = b4a.alloc(end);
+            b4a.copy(empty, first.data, firstBlock.start);
+            await table.put(first);
+        }
+
+        if (last) {
+            const end = Math.min(lastBlock.end, chunkSize);
+            const empty = b4a.alloc(end);
+            b4a.copy(empty, last.data, lastBlock.start);
+            await table.put(last);
+        }
+
+        req.callback(null);
+    }
+
+    async _truncate(req) {
+        const {
+            offset
+        } = req;
+
+        const {
+            length, chunkSize, table
+        } = this;
+
+        await this.__open();
+
+        if (offset === length) {
+            return req.callback(null, null);
+        } else if (offset > length) {
+            const oldLength = length;
+            return this.write(length, b4a.alloc(req.offset - length), (err) => {
+                if (err) return req.callback(err, null);
+                this.length = oldLength;
+                req.callback(null, null);
+            });
+        }
+
+        // Shrink
+        const blocks = this._blocks(offset, length);
+        const [{block: firstBlock, start, end}] = blocks;
+
+        try {
+            await table.where("chunk").above(firstBlock).delete();
+            const blockRange = end - start;
+            if (blockRange === chunkSize) {
+                await table.delete(firstBlock);
+            } else {
+                let truncatedData = b4a.alloc(blockRange);
+                let {data, chunk} = await table.get(firstBlock);
+                b4a.copy(truncatedData, data, start, start, blockRange)
+                await table.put({
+                    chunk, data
+                })
+            }
+            this.length = offset;
+            req.callback(null, null);
+        } catch (e) {
+            req.callback(e, null);
+        }
     }
 
     _stat(req) {
-        const self = this;
-        setTimeout(
-            () => req.callback(null, { size: self.length })
+        // todo: add metadata to file entry to hold the chunk size (chunk size),
+        //       and other information about the file like user specific
+        //       data, author, creation time, pre-calculated hashes.
+        this.__open().then(
+            () => req.callback(null, {size: this.length})
         );
+    }
+
+    _close(req) {
+        // It really makes no sense to me to close the file
+        // the only thing I can think of is to keep a count of each file opened
+        // per database, and once each file of that database is closed, just close the
+        // database as a whole. But, I really don't see why unless someone can
+        // enlighten me.
+        req.callback(null, null);
     }
 }
 
-function backify (r, cb) {
-    r.addEventListener('success', ev => { cb(null, ev) })
-    r.addEventListener('error', cb)
-}
+/**
+ * Get a map of all loaded files.
+ *
+ * @example
+ * // You could do this
+ * rai("helloWorld.txt");
+ * allLoadedFiles.get("helloWorld.txt").read(0, 5, (e, v) => {});
+ * @type Map | config.MapClass
+ */
+export const allLoadedFiles = RandomAccessIdb.loadedFiles
 
-// Convenience
-export {RandomAccessIndexedDB as RAI, RandomAccessIndexedDB as default, b4a};
+let defaultFileMaker;
+
+/**
+ * Open database 'dbName=rai' then you can create files from the same function.
+ *
+ * This is the same as openDatabase("rai")(fileName); or openDatabase()(fileName);
+ *
+ * @function make
+ * @param fileName file to create
+ * @param config See config for openDatabase function
+ * @returns {RandomAccessIdb} RandomAccessIdb instance.
+ */
+export default function make(fileName, config = {}) {
+    if (!defaultFileMaker?.db.isOpen()) {
+        defaultFileMaker = openDatabase(undefined, config);
+    }
+
+    return defaultFileMaker(fileName);
+};
+
+export {make};
