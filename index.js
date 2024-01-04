@@ -215,7 +215,7 @@ class RandomAccessIdb extends RandomAccessStorage {
             error.code = "ENOENT";
             return req.callback(error, null);
         }
-        if (size === Number.POSITIVE_INFINITY) size = offset + length;
+        if (size === Number.POSITIVE_INFINITY) size = length - offset;
 
         if ((length || 0) < offset + size) {
             return req.callback(new Error('Could not satisfy length'))
