@@ -18,9 +18,9 @@
 <dl>
 <dt><a href="#allLoadedFiles">allLoadedFiles</a></dt>
 <dd><p>Get a map of all loaded files.
-stored by a key with this format: dbName#fileName
+stored by a key with this format by default: dbName\0version\0fileName
 So you could do:
-allLoadedFiles.get(&quot;rai#helloWorld.txt&quot;);</p>
+allLoadedFiles.get(&quot;rai\01\0helloWorld.txt&quot;);</p>
 </dd>
 </dl>
 
@@ -60,6 +60,8 @@ allLoadedFiles.get(&quot;rai#helloWorld.txt&quot;);</p>
 | Table | <code>Dexie.Table</code> | The table in the db this file is created. |
 | chunkSize | <code>number</code> | The chunk size this file is stored on the database. |
 | dbName | <code>string</code> | The database name this file is stored on. |
+| key | <code>string</code> | The key this file uses in allLoadedFiles map. |
+| version | <code>number</code> | The version of the database this file was opened from. |
 
 <a name="defaultConfig"></a>
 
@@ -71,9 +73,9 @@ Current default configurations.
 
 ## allLoadedFiles
 Get a map of all loaded files.
-stored by a key with this format: dbName#fileName
+stored by a key with this format by default: dbName\0version\0fileName
 So you could do:
-allLoadedFiles.get("rai#helloWorld.txt");
+allLoadedFiles.get("rai\01\0helloWorld.txt");
 
 **Kind**: global constant  
 <a name="updateDefaultConfig"></a>
@@ -105,26 +107,28 @@ Create an indexeddb database entry
 | [config] |  | Optional configurations |
 | [config.chunkSize] | <code>4096</code> | The chunk size of the files created from the created database. When reopened, it should have the same size it was created with. |
 | [config.size] | <code>4096</code> | Alias of [config.chunkSize](config.chunkSize) |
+| [config.version] | <code>1</code> | Default version to open files. You can specify version for each file in the openDatabase~maker function as well. **Don't use decimals in version. Whole numbers only** **Good**: 103254 **Bad**: 1.23.521 |
 
 **Example**  
 ```js
 // File creation example
 
-const fileMaker = create();
+const fileMaker = openDatabase();
 const rai = fileMaker("helloWorld.txt");
 rai.write(0, Buffer.from("hello world!!!"));
 ```
 <a name="openDatabase..maker"></a>
 
-### openDatabase~maker(fileName) ⇒ [<code>RandomAccessIdb</code>](#RandomAccessIdb)
+### openDatabase~maker(fileName, version) ⇒ [<code>RandomAccessIdb</code>](#RandomAccessIdb)
 Creates the random access storage instance of a file.
 
 **Kind**: inner method of [<code>openDatabase</code>](#openDatabase)  
 **Returns**: [<code>RandomAccessIdb</code>](#RandomAccessIdb) - RandomAccessIdb class instance  
 
-| Param |
-| --- |
-| fileName | 
+| Param | Description |
+| --- | --- |
+| fileName |  |
+| version | Version of database to open this file from |
 
 <a name="make"></a>
 

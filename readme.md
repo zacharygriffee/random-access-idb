@@ -37,14 +37,14 @@ import {openDatabase} from "@zacharygriffee/random-access-idb";
     const margaritaDb = openDatabase("margarita", { chunkSize: 1024 });
     const martiniDb = openDatabase("martini", { chunkSize: 512 );
     
-    const goldenMargarita = margaritaDb("goldenMargarita.txt");
+    const goldenMargarita = margaritaDb("goldenMargarita.txt", 1);
     goldenMargarita.write(0, b4a.from("add orange juice"), (e) => {
         goldenMargarita.read(4, 6, (e, buffer) => {
             b4a.toString(buffer); // orange
         })
     });
     
-    const dryGinMartini = martiniDb("dryGinMartini.txt");
+    const dryGinMartini = martiniDb("dryGinMartini.txt", 52);
     
     dryGinMartini.write(0, b4a.from("less vermouth"), (e) => {
             dryGinMartini.read(5, 8, (e, buffer) => {

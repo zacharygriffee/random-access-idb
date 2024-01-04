@@ -39,7 +39,7 @@
             })
         });
         t.teardown(() => {
-            ras.db.close();
+            ras.db.delete();
         });
     });
 
@@ -176,7 +176,7 @@
         })
     });
 
-    test("basic hypercore", {timeout: 600000}, async t => {
+    test("basic hypercore with a lot of writes", {timeout: 600000}, async t => {
         const fileMaker = createDatabase(makeid(10));
         const core = new Hypercore(file => fileMaker(file));
         await core.ready();
@@ -191,6 +191,13 @@
         t.is(b4a.toString(await core.get(audit1)), "hello world " + audit1)
         t.is(b4a.toString(await core.get(audit2)), "hello world " + audit2)
         fileMaker.db.delete();
+    });
+
+    test("Test Complete", async t => {
+        const [bodyEle] = document.getElementsByTagName("body");
+        bodyEle.style.backgroundColor = "green";
+        t.pass();
+        localStorage.clear();
     });
 
 
@@ -221,5 +228,9 @@
         return result;
     }
 </script>
+
+<h1>Testing</h1>
+<h2>Background will go green once test is complete</h2>
+<h3>Keep dev tools closed until test complete for better time stamps</h3>
 </body>
 </html>

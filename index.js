@@ -14,10 +14,10 @@ import b4a from "b4a";
 
 /**
  * Current default configurations.
- * @type {{chunkSize: number, MapClass: MapConstructor}}
+ * @type {{chunkSize: number, MapClass: MapConstructor, dbSeparator: string}}
  */
 export let defaultConfig = {
-    chunkSize: 4096, MapClass: Map
+    chunkSize: 4096, MapClass: Map, dbSeparator: "\0"
 };
 
 /**
@@ -40,7 +40,7 @@ export function updateDefaultConfig(cb) {
  *
  * @example // File creation example
  *
- * const fileMaker = create();
+ * const fileMaker = openDatabase();
  * const rai = fileMaker("helloWorld.txt");
  * rai.write(0, Buffer.from("hello world!!!"));
  *
@@ -49,15 +49,22 @@ export function updateDefaultConfig(cb) {
  * @param [config.chunkSize=4096] The chunk size of the files created from the created database.
  * When reopened, it should have the same size it was created with.
  * @param [config.size=4096] Alias of {@link config.chunkSize}
+ * @param [config.version=1] Default version to open files. You can specify version for each file
+ * in the openDatabase~maker function as well.
+ * **Don't use decimals in version. Whole numbers only**
+ * **Good**: 103254
+ * **Bad**: 1.23.521
+ *
  * @returns Function<RandomAccessIdb>
  */
 export function openDatabase(dbName = "rai", config = {}) {
     if (typeof config === "number") config = {chunkSize: config};
     const MapClass = defaultConfig.MapClass;
     const {
-
         size,
-        chunkSize = size || defaultConfig.chunkSize
+        chunkSize = size || defaultConfig.chunkSize,
+        dbSeparator = defaultConfig.dbSeparator,
+        version: dbVersion = 1
     } = config;
 
     if (!RandomAccessIdb.loadedFiles) RandomAccessIdb.loadedFiles = new MapClass();
@@ -69,10 +76,12 @@ export function openDatabase(dbName = "rai", config = {}) {
     /**
      * Creates the random access storage instance of a file.
      * @param fileName
+     * @param version Version of database to open this file from
      * @returns {RandomAccessIdb} RandomAccessIdb class instance
      */
-    function maker(fileName) {
-        const key = dbName + "#" + fileName;
+    function maker(fileName, version = dbVersion) {
+        const key = makeKey(dbSeparator, dbName, version, fileName);
+        const lengthKey = key + dbSeparator + "length";
         if (RandomAccessIdb.loadedFiles.has(key)) {
             return RandomAccessIdb.loadedFiles.get(key);
         }
@@ -81,17 +90,17 @@ export function openDatabase(dbName = "rai", config = {}) {
             return maker.call(new RandomAccessIdb(), fileName);
         }
 
-        db.version(1).stores({
+        db.version(version).stores({
             [fileName]: '++chunk,data'
         });
 
         const instance = Object.defineProperties(this, {
             length: {
                 get() {
-                    return Number(localStorage.getItem(key + "#length") || 0);
+                    return Number(localStorage.getItem(lengthKey) || 0);
                 }, set(newLength) {
-                    if (newLength === 0) return localStorage.removeItem(key + "#length");
-                    localStorage.setItem(key + "#length", newLength);
+                    if (newLength === 0) return localStorage.removeItem(lengthKey);
+                    localStorage.setItem(lengthKey, newLength);
                 }
             }, fileName: {
                 get() {
@@ -112,6 +121,14 @@ export function openDatabase(dbName = "rai", config = {}) {
             }, dbName: {
                 get() {
                     return dbName;
+                }
+            }, key: {
+                get() {
+                    return key;
+                }
+            }, version: {
+                get() {
+                    return version
                 }
             }
         });
@@ -139,9 +156,23 @@ export function openDatabase(dbName = "rai", config = {}) {
  * The chunk size this file is stored on the database.
  * @property {string} dbName
  * The database name this file is stored on.
+ * @property {string} key
+ * The key this file uses in allLoadedFiles map.
+ * @property {number} version
+ * The version of the database this file was opened from.
+ *
  */
 class RandomAccessIdb extends RandomAccessStorage {
     static loadedFiles;
+
+    purge() {
+        const {
+            table
+        } = this;
+
+        this.length = 0;
+        table.clear();
+    }
 
     _blocks(i, j) {
         const {
@@ -192,7 +223,7 @@ class RandomAccessIdb extends RandomAccessStorage {
 
         const blocks = this._blocks(offset, offset + size);
         const [{block: firstBlock}] = blocks;
-        const [{block: lastBlock}] = [...blocks].reverse();
+        const {block: lastBlock} = blocks[blocks.length - 1];
 
         let cursor = 0;
         try {
@@ -226,40 +257,39 @@ class RandomAccessIdb extends RandomAccessStorage {
 
         const blocks = this._blocks(offset, offset + data.length);
         const [{block: firstBlock}] = blocks;
-        const [{block: lastBlock}] = [...blocks].reverse();
+        const {block: lastBlock} = blocks[blocks.length - 1];
         let newLength;
 
-        db.transaction("readwrite", table,
-            async function () {
-                const chunks = (await table.where("chunk")
-                    .between(firstBlock, lastBlock, true, true)
-                    .toArray())
-                    .map(({data}) => data);
+        db.transaction("readwrite", table, async function () {
+            const chunks = (await table.where("chunk")
+                .between(firstBlock, lastBlock, true, true)
+                .toArray())
+                .map(({data}) => data);
 
-                let cursor = 0;
-                let i = 0;
-                const ops = [];
+            let cursor = 0;
+            let i = 0;
+            const ops = [];
 
 
-                for (const {block, start, end} of blocks) {
-                    const blockPos = i++;
-                    const blockRange = end - start;
+            for (const {block, start, end} of blocks) {
+                const blockPos = i++;
+                const blockRange = end - start;
 
-                    if (blockRange === chunkSize) {
-                        chunks[blockPos] = b4a.from(data.slice(cursor, cursor + blockRange));
-                    } else {
-                        chunks[blockPos] ||= b4a.from(b4a.alloc(chunkSize));
-                        b4a.copy(b4a.from(data), chunks[blockPos], start, cursor, cursor + blockRange);
-                    }
-
-                    ops.push({chunk: block, data: b4a.from(chunks[blockPos])});
-
-                    cursor += blockRange;
+                if (blockRange === chunkSize) {
+                    chunks[blockPos] = b4a.from(data.slice(cursor, cursor + blockRange));
+                } else {
+                    chunks[blockPos] ||= b4a.from(b4a.alloc(chunkSize));
+                    b4a.copy(b4a.from(data), chunks[blockPos], start, cursor, cursor + blockRange);
                 }
 
-                newLength = Math.max(length || 0, offset + data.length);
-                await table.bulkPut(ops);
-            })
+                ops.push({chunk: block, data: b4a.from(chunks[blockPos])});
+
+                cursor += blockRange;
+            }
+
+            newLength = Math.max(length || 0, offset + data.length);
+            await table.bulkPut(ops);
+        })
             .then(() => {
                 this.length = newLength;
                 req.callback(null);
@@ -337,12 +367,12 @@ class RandomAccessIdb extends RandomAccessStorage {
         await this.__open();
 
         if (offset === length) {
+            // nothing
             return req.callback(null, null);
         } else if (offset > length) {
-            const oldLength = length;
+            // grow
             return this.write(length, b4a.alloc(req.offset - length), (err) => {
                 if (err) return req.callback(err, null);
-                this.length = oldLength;
                 req.callback(null, null);
             });
         }
@@ -375,26 +405,32 @@ class RandomAccessIdb extends RandomAccessStorage {
         // todo: add metadata to file entry to hold the chunk size (chunk size),
         //       and other information about the file like user specific
         //       data, author, creation time, pre-calculated hashes.
-        this.__open().then(
-            () => req.callback(null, {size: this.length})
-        );
+        this.__open().then(() => req.callback(null, {size: this.length}));
     }
 
     _close(req) {
+        const {
+            key
+        } = this;
         // It really makes no sense to me to close the file
         // the only thing I can think of is to keep a count of each file opened
         // per database, and once each file of that database is closed, just close the
         // database as a whole. But, I really don't see why unless someone can
         // enlighten me.
+        allLoadedFiles.delete(key)
         req.callback(null, null);
     }
 }
 
+export function makeKey(sep, dbName, version, fileName) {
+    return [dbName, version, fileName].join(sep);
+}
+
 /**
  * Get a map of all loaded files.
- * stored by a key with this format: dbName#fileName
+ * stored by a key with this format by default: dbName\0version\0fileName
  * So you could do:
- * allLoadedFiles.get("rai#helloWorld.txt");
+ * allLoadedFiles.get("rai\01\0helloWorld.txt");
  */
 export const allLoadedFiles = RandomAccessIdb.loadedFiles
 
