@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Test</title>
+</head>
+<body>
+<script type="importmap">
+        {
+            "imports": {
+                "streamx": "https://esm.run/streamx",
+                "brittle": "https://esm.run/brittle",
+                "b4a": "https://esm.run/b4a",
+                "p-queue": "https://esm.run/p-queue",
+                "random-access-storage": "https://esm.run/random-access-storage",
+                "random-access-memory": "https://esm.run/random-access-memory",
+                "hypercore": "https://esm.run/hypercore",
+                "dexie": "https://esm.run/dexie",
+                "randombytes": "https://cdn.jsdelivr.net/npm/randombytes/+esm"
+            }
+        }
+
+
+</script>
+<script type="module">
+    import b4a from "b4a";
+    import defaultMaker, {openDatabase as createDatabase} from "./index.js";
+    import {solo, test} from "brittle";
+    import Hypercore from "hypercore";
+
+    const Buffer = b4a;
+
+    test("default maker", function (t) {
+        t.plan(1);
+        const ras = defaultMaker("defaultFile.txt");
+        ras.write(0, b4a.from("hello world!"), e => {
+            ras.read(0, 5, (e, buf) => {
+                t.is(b4a.toString(buf), "hello");
+            })
+        });
+        t.teardown(() => {
+            ras.db.close();
+        });
+    });
+
+    test('delete', function (t) {
+        t.plan(6)
+
+        const pageSize = 1024
+        const {file, close} = newFile();
+
+        // identify bug in deletion when file.length > 2 * page size
+        const orig = Buffer.alloc(pageSize * 3, 0xff)
+        const expected = Buffer.alloc(10, 0xff)
+        const origText = b4a.toString(orig);
+        const expectedText = b4a.toString(expected);
+
+        file.write(0, orig, function (err) {
+            t.absent(err, 'no error')
+            file.read(0, file.length, function (err, buf) {
+                t.absent(err, 'no error')
+                t.is(b4a.toString(buf), origText)
+                file.del(10, Infinity, function (err) {
+                    t.absent(err, 'no error')
+                    file.read(0, file.length, function (err, buf) {
+                        t.absent(err, 'no error')
+                        t.is(b4a.toString(buf), expectedText)
+                    })
+                })
+            })
+        });
+
+        t.teardown(close);
+    })
+
+
+    test('write/read big chunks', async function (t) {
+        t.plan(1)
+        const {file, close} = newFile();
+        t.teardown(close);
+        const bigBuffer = Buffer.alloc(300 * 1024)
+
+        bigBuffer.fill('hey. hey. how are you doing?. i am good thanks how about you? i am good')
+
+        const io = t.test('write and read')
+        io.plan(6)
+
+        file.write(0, bigBuffer, function (err) {
+            io.absent(err, 'no error')
+            file.read(0, bigBuffer.length, function (err, buf) {
+                io.absent(err, 'no error')
+                io.ok(b4a.equals(buf, bigBuffer))
+            })
+        })
+        file.write(bigBuffer.length * 2, bigBuffer, function (err) {
+            io.absent(err, 'no error')
+            file.read(bigBuffer.length * 2, bigBuffer.length, function (err, buf) {
+                io.absent(err, 'no error')
+                io.ok(b4a.equals(buf, bigBuffer))
+            })
+        })
+
+        await io
+    })
+
+    test('read tons of small chunks', {timeout: 50000000}, function (t) {
+        t.plan(1)
+        const {file, close} = newFile();
+        t.teardown(close);
+        const bigBuffer = Buffer.alloc(200 * 1024)
+        let same = true
+
+        bigBuffer.fill('hey. hey. how are you doing?. i am good thanks how about you? i am good')
+
+        file.write(0, bigBuffer, function () {
+            let offset = 0
+            file.read(offset, 128, function loop(_, buf) {
+                if (same) same = b4a.equals(buf, bigBuffer.subarray(offset, offset + 128))
+                offset += 128
+                if (offset >= bigBuffer.byteLength) {
+                    t.ok(same, 'all sub chunks match')
+                    t.end()
+                } else {
+                    file.read(offset, 128, loop)
+                }
+            })
+        })
+    });
+
+    test('not sync', async function (t) {
+        t.plan(3)
+
+        const {file, close} = newFile();
+        t.teardown(close);
+
+        let sync = true
+
+        file.write(10, b4a.from('hi'), function () {
+            t.absent(sync)
+            sync = true
+            file.write(0, b4a.from('hello'), function () {
+                t.absent(sync)
+                sync = true
+                file.read(10, 2, function () {
+                    t.absent(sync)
+                })
+                sync = false
+            })
+            sync = false
+        });
+        sync = false
+    })
+
+    test('random access write and read', async function (t) {
+        t.plan(8)
+        const {file, close} = newFile();
+        t.teardown(close);
+
+        file.write(10, b4a.from('hi'), function (err) {
+            t.absent(err, 'no error')
+            file.write(0, b4a.from('hello'), function (err) {
+                t.absent(err, 'no error')
+                file.read(10, 2, function (err, buf) {
+                    t.absent(err, 'no error')
+                    t.is(b4a.toString(buf), 'hi')
+                    file.read(0, 5, function (err, buf) {
+                        t.absent(err, 'no error')
+                        t.is(b4a.toString(buf), 'hello')
+                        file.read(5, 5, function (err, buf) {
+                            t.absent(err, 'no error')
+                            t.ok(b4a.equals(b4a.from(buf), b4a.from([0, 0, 0, 0, 0])))
+                        })
+                    })
+                })
+            })
+        })
+    });
+
+    test("basic hypercore", {timeout: 600000}, async t => {
+        const fileMaker = createDatabase(makeid(10));
+        const core = new Hypercore(file => fileMaker(file));
+        await core.ready();
+        const count = 100;
+        const audit1 = random(count);
+        const audit2 = random(count);
+
+        for (let i = 0; i < count; i++) {
+            await core.append(b4a.from("hello world " + i))
+        }
+
+        t.is(b4a.toString(await core.get(audit1)), "hello world " + audit1)
+        t.is(b4a.toString(await core.get(audit2)), "hello world " + audit2)
+        fileMaker.db.delete();
+    });
+
+
+    function newFile(config) {
+        const fileMaker = createDatabase(makeid(10), config);
+        const randomName1 = makeid(10) + ".txt";
+        const file = fileMaker(randomName1, config);
+
+        return {
+            file,
+            close: () => file.db.delete()
+        };
+    }
+
+    function random(len) {
+        return Math.floor(Math.random() * len)
+    }
+
+    function makeid(length) {
+        let result = '';
+        const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        const charactersLength = characters.length;
+        let counter = 0;
+        while (counter < length) {
+            result += characters.charAt(Math.floor(Math.random() * charactersLength));
+            counter += 1;
+        }
+        return result;
+    }
+</script>
+</body>
+</html>
