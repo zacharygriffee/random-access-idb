@@ -103,7 +103,7 @@ Create an indexeddb database entry
 | --- | --- | --- |
 | [dbName] | <code>&quot;rai&quot;</code> | The name of the database |
 | [config] |  | Optional configurations |
-| [config.chunkSize] | <code>4096</code> | The chunk size of the file stored in the database. This cannot be changed once set and if you reopen the database, it should have the same size it was created with. |
+| [config.chunkSize] | <code>4096</code> | The chunk size of the files created from the created database. When reopened, it should have the same size it was created with. |
 | [config.size] | <code>4096</code> | Alias of [config.chunkSize](config.chunkSize) |
 
 **Example**  

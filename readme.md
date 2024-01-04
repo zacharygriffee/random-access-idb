@@ -2,18 +2,11 @@
 
 ---
 
-### [API Documentation](https://github.com/zacharygriffee/random-access-idb/blob/overhaul/api.md#RandomAccessIdb)
-
 [random-access-storage][1] compatible indexedDB storage layer
 
+### [API Documentation](https://github.com/zacharygriffee/random-access-idb/blob/overhaul/api.md#RandomAccessIdb)
+
 [1]: https://github.com/random-access-storage/random-access-storage
-
-### This is a complete rework of the original random-access-idb. 
-
-Differences:
-
-- Uses [`b4a`](https://www.npmjs.com/package/b4a) for buffer stuff.
-- Uses [`dexie`](https://dexie.org/docs/Dexie/Dexie) for indexeddb handling
 
 ---
 
@@ -38,7 +31,7 @@ import {openDatabase} from "@zacharygriffee/random-access-idb";
 > When you need complex solutions
 
 ``` ecmascript 6
-    import {openDatabase} from "@zacharygriffee/random-access-id";
+    import {openDatabase} from "@zacharygriffee/random-access-idb";
     
     // Always open the database with the same chunksize it was created with.
     const margaritaDb = openDatabase("margarita", { chunkSize: 1024 });
@@ -65,7 +58,7 @@ import {openDatabase} from "@zacharygriffee/random-access-idb";
 
 > When your life is simple and don't need all that extra stuff.
 ``` ecmascript 6
-    import rai from "@zacharygriffee/random-access-id";
+    import rai from "@zacharygriffee/random-access-idb";
     
     // default export is like calling openDatabase('rai')("hello.txt");
     const file = rai("hello.txt");

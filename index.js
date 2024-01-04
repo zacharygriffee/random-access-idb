@@ -46,8 +46,8 @@ export function updateDefaultConfig(cb) {
  *
  * @param [dbName="rai"] The name of the database
  * @param [config] Optional configurations
- * @param [config.chunkSize=4096] The chunk size of the file stored in the database. This cannot be changed once set and
- * if you reopen the database, it should have the same size it was created with.
+ * @param [config.chunkSize=4096] The chunk size of the files created from the created database.
+ * When reopened, it should have the same size it was created with.
  * @param [config.size=4096] Alias of {@link config.chunkSize}
  * @returns Function<RandomAccessIdb>
  */
