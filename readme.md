@@ -4,7 +4,7 @@
 
 [random-access-storage][1] compatible indexedDB storage layer
 
-### [API Documentation](https://github.com/zacharygriffee/random-access-idb/blob/overhaul/api.md#RandomAccessIdb)
+### [API Documentation](https://github.com/zacharygriffee/random-access-idb/blob/master/api.md)
 
 [1]: https://github.com/random-access-storage/random-access-storage
 
