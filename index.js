@@ -55,6 +55,7 @@ export function openDatabase(dbName = "rai", config = {}) {
     if (typeof config === "number") config = {chunkSize: config};
     const MapClass = defaultConfig.MapClass;
     const {
+
         size,
         chunkSize = size || defaultConfig.chunkSize
     } = config;
