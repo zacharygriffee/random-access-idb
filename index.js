@@ -72,7 +72,7 @@ export function openDatabase(dbName = "rai", config = {}) {
      * @returns {RandomAccessIdb} RandomAccessIdb class instance
      */
     function maker(fileName) {
-        const key = dbName + "#" + fileName + "#length";
+        const key = dbName + "#" + fileName;
         if (RandomAccessIdb.loadedFiles.has(key)) {
             return RandomAccessIdb.loadedFiles.get(key);
         }
@@ -88,10 +88,10 @@ export function openDatabase(dbName = "rai", config = {}) {
         const instance = Object.defineProperties(this, {
             length: {
                 get() {
-                    return Number(localStorage.getItem(key) || 0);
+                    return Number(localStorage.getItem(key + "#length") || 0);
                 }, set(newLength) {
-                    if (newLength === 0) return localStorage.removeItem(key);
-                    localStorage.setItem(key, newLength);
+                    if (newLength === 0) return localStorage.removeItem(key + "#length");
+                    localStorage.setItem(key + "#length", newLength);
                 }
             }, fileName: {
                 get() {
@@ -392,12 +392,9 @@ class RandomAccessIdb extends RandomAccessStorage {
 
 /**
  * Get a map of all loaded files.
- *
- * @example
- * // You could do this
- * rai("helloWorld.txt");
- * allLoadedFiles.get("helloWorld.txt").read(0, 5, (e, v) => {});
- * @type Map | config.MapClass
+ * stored by a key with this format: dbName#fileName
+ * So you could do:
+ * allLoadedFiles.get("rai#helloWorld.txt");
  */
 export const allLoadedFiles = RandomAccessIdb.loadedFiles
 

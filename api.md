@@ -16,8 +16,11 @@
 ## Constants
 
 <dl>
-<dt><a href="#allLoadedFiles">allLoadedFiles</a> : <code>Map</code> | <code>config.MapClass</code></dt>
-<dd><p>Get a map of all loaded files.</p>
+<dt><a href="#allLoadedFiles">allLoadedFiles</a></dt>
+<dd><p>Get a map of all loaded files.
+stored by a key with this format: dbName#fileName
+So you could do:
+allLoadedFiles.get(&quot;rai#helloWorld.txt&quot;);</p>
 </dd>
 </dl>
 
@@ -66,16 +69,13 @@ Current default configurations.
 **Kind**: global variable  
 <a name="allLoadedFiles"></a>
 
-## allLoadedFiles : <code>Map</code> \| <code>config.MapClass</code>
+## allLoadedFiles
 Get a map of all loaded files.
+stored by a key with this format: dbName#fileName
+So you could do:
+allLoadedFiles.get("rai#helloWorld.txt");
 
 **Kind**: global constant  
-**Example**  
-```js
-// You could do this
-rai("helloWorld.txt");
-allLoadedFiles.get("helloWorld.txt").read(0, 5, (e, v) => {});
-```
 <a name="updateDefaultConfig"></a>
 
 ## updateDefaultConfig(cb) ⇒ <code>Promise.&lt;void&gt;</code>
