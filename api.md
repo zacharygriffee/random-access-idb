@@ -110,6 +110,12 @@ Deletes the file from allLoadedFiles.
 Write `data` starting at `offset`
 
 **Kind**: instance method of [<code>RandomAccessIdb</code>](#RandomAccessIdb)  
+**Todo**
+
+- [ ] Unlike truncate and del, if a write operation results in empty chunks,
+      those chunks will not be deleted from underlying table for speed reasons.
+      Create function that will 'find empty chunks' to delete.
+
 
 | Param | Description |
 | --- | --- |
@@ -124,7 +130,7 @@ Read `size` amount of bytes starting from `offset`.
 
 Conditions:
 - If `size` is zero, will return a zero length buffer.
-- If `offset` is greater than file length, will error with code ENOENT to mimic random-access-file.
+- If `offset+size` is greater than file length, will error with code ENOENT to mimic random-access-file.
 
 **Kind**: instance method of [<code>RandomAccessIdb</code>](#RandomAccessIdb)  
 
