@@ -184,6 +184,9 @@ class RandomAccessIdb extends RandomAccessStorage {
 
     /**
      * Write `data` starting at `offset`
+     * @todo Unlike truncate and del, if a write operation results in empty chunks,
+     *       those chunks will not be deleted from underlying table for speed reasons.
+     *       Create function that will 'find empty chunks' to delete.
      * @param offset Offset to begin writing bytes from data parameter
      * @param data A buffer of `data` to write
      * @param cb (error) =>
@@ -195,7 +198,7 @@ class RandomAccessIdb extends RandomAccessStorage {
      *
      * Conditions:
      * - If `size` is zero, will return a zero length buffer.
-     * - If `offset` is greater than file length, will error with code ENOENT to mimic random-access-file.
+     * - If `offset+size` is greater than file length, will error with code ENOENT to mimic random-access-file.
      * @param offset Offset to begin reading bytes
      * @param size The amount of bytes to read
      * @param cb (error, buffer) =>
