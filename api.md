@@ -63,6 +63,134 @@ allLoadedFiles.get(&quot;rai\01\0helloWorld.txt&quot;);</p>
 | key | <code>string</code> | The key this file uses in allLoadedFiles map. |
 | version | <code>number</code> | The version of the database this file was opened from. |
 
+
+* [RandomAccessIdb](#RandomAccessIdb) ⇐ <code>RandomAccessStorage</code>
+    * [.open(cb)](#RandomAccessIdb+open)
+    * [.close(cb)](#RandomAccessIdb+close)
+    * [.write(offset, data, cb)](#RandomAccessIdb+write)
+    * [.read(offset, size, cb)](#RandomAccessIdb+read)
+    * [.del(offset, size, cb)](#RandomAccessIdb+del)
+    * [.truncate(offset, cb)](#RandomAccessIdb+truncate)
+    * [.stat(cb)](#RandomAccessIdb+stat)
+    * [.purge(cb)](#RandomAccessIdb+purge) ⇒
+
+<a name="RandomAccessIdb+open"></a>
+
+### randomAccessIdb.open(cb)
+Open the database table the file exists in
+
+**Kind**: instance method of [<code>RandomAccessIdb</code>](#RandomAccessIdb)  
+
+| Param | Description |
+| --- | --- |
+| cb | (e) => |
+
+<a name="RandomAccessIdb+close"></a>
+
+### randomAccessIdb.close(cb)
+Deletes the file from allLoadedFiles.
+
+**Kind**: instance method of [<code>RandomAccessIdb</code>](#RandomAccessIdb)  
+**Todo**
+
+- [ ] Determine if any further implementation of close is even needed
+      It really makes no sense to me to close the file
+      the only thing I can think of is to keep a count of each file opened
+      per database, and once each file of that database is closed, just close the
+      database as a whole.
+
+
+| Param | Description |
+| --- | --- |
+| cb | (error) => |
+
+<a name="RandomAccessIdb+write"></a>
+
+### randomAccessIdb.write(offset, data, cb)
+Write `data` starting at `offset`
+
+**Kind**: instance method of [<code>RandomAccessIdb</code>](#RandomAccessIdb)  
+
+| Param | Description |
+| --- | --- |
+| offset | Offset to begin writing bytes from data parameter |
+| data | A buffer of `data` to write |
+| cb | (error) => |
+
+<a name="RandomAccessIdb+read"></a>
+
+### randomAccessIdb.read(offset, size, cb)
+Read `size` amount of bytes starting from `offset`.
+
+Conditions:
+- If `size` is zero, will return a zero length buffer.
+- If `offset` is greater than file length, will error with code ENOENT to mimic random-access-file.
+
+**Kind**: instance method of [<code>RandomAccessIdb</code>](#RandomAccessIdb)  
+
+| Param | Description |
+| --- | --- |
+| offset | Offset to begin reading bytes |
+| size | The amount of bytes to read |
+| cb | (error, buffer) => |
+
+<a name="RandomAccessIdb+del"></a>
+
+### randomAccessIdb.del(offset, size, cb)
+Deletes `size` amount of bytes starting at `offset`. Any empty chunks are deleted from the underlying database table.
+
+**Kind**: instance method of [<code>RandomAccessIdb</code>](#RandomAccessIdb)  
+
+| Param | Description |
+| --- | --- |
+| offset | Offset to begin deleting bytes from |
+| size | The amount of bytes to delete |
+| cb | (error) => |
+
+<a name="RandomAccessIdb+truncate"></a>
+
+### randomAccessIdb.truncate(offset, cb)
+- If `offset` is greater than size of file, will grow the file with empty bytes to that length.
+- If `offset` is less than size of file, will delete all data after `offset` and any resulting empty chunks are
+  deleted from underlying database table.
+- If `offset` is the same, nothing is done to the file.
+
+**Kind**: instance method of [<code>RandomAccessIdb</code>](#RandomAccessIdb)  
+
+| Param | Description |
+| --- | --- |
+| offset | Offset to begin aforementioned operations. |
+| cb | (error) => |
+
+<a name="RandomAccessIdb+stat"></a>
+
+### randomAccessIdb.stat(cb)
+Returns an object resulting in the statistics of the file.
+For now, only size of file is included which is the same as length property.
+
+**Kind**: instance method of [<code>RandomAccessIdb</code>](#RandomAccessIdb)  
+**Todo**
+
+- [ ] Add metadata to files to include block size, author, creation date, and precalculated hashes.
+
+
+| Param | Description |
+| --- | --- |
+| cb | (error) => |
+
+<a name="RandomAccessIdb+purge"></a>
+
+### randomAccessIdb.purge(cb) ⇒
+Purge the file from the table.
+'Closes' the file from allFilesOpened map.
+
+**Kind**: instance method of [<code>RandomAccessIdb</code>](#RandomAccessIdb)  
+**Returns**: void  
+
+| Param | Description |
+| --- | --- |
+| cb | (e) => |
+
 <a name="defaultConfig"></a>
 
 ## defaultConfig : <code>Object</code>
@@ -121,6 +249,7 @@ rai.write(0, Buffer.from("hello world!!!"));
 
 ### openDatabase~maker(fileName, version) ⇒ [<code>RandomAccessIdb</code>](#RandomAccessIdb)
 Creates the random access storage instance of a file.
+See: https://github.com/random-access-storage/random-access-storage for inherited members.
 
 **Kind**: inner method of [<code>openDatabase</code>](#openDatabase)  
 **Returns**: [<code>RandomAccessIdb</code>](#RandomAccessIdb) - RandomAccessIdb class instance  

@@ -75,6 +75,7 @@ export function openDatabase(dbName = "rai", config = {}) {
 
     /**
      * Creates the random access storage instance of a file.
+     * See: https://github.com/random-access-storage/random-access-storage for inherited members.
      * @param fileName
      * @param version Version of database to open this file from
      * @returns {RandomAccessIdb} RandomAccessIdb class instance
@@ -160,18 +161,91 @@ export function openDatabase(dbName = "rai", config = {}) {
  * The key this file uses in allLoadedFiles map.
  * @property {number} version
  * The version of the database this file was opened from.
- *
  */
 class RandomAccessIdb extends RandomAccessStorage {
     static loadedFiles;
 
-    purge() {
+    /**
+     * Open the database table the file exists in
+     * @param cb (e) =>
+     */
+    open(cb) { super.open(cb) }
+
+    /**
+     * Deletes the file from allLoadedFiles.
+     * @todo Determine if any further implementation of close is even needed
+     *       It really makes no sense to me to close the file
+     *       the only thing I can think of is to keep a count of each file opened
+     *       per database, and once each file of that database is closed, just close the
+     *       database as a whole.
+     * @param cb (error) =>
+     */
+    close(cb) { super.close(cb) }
+
+    /**
+     * Write `data` starting at `offset`
+     * @param offset Offset to begin writing bytes from data parameter
+     * @param data A buffer of `data` to write
+     * @param cb (error) =>
+     */
+    write(offset, data, cb) { super.write(offset, data, cb) }
+
+    /**
+     * Read `size` amount of bytes starting from `offset`.
+     *
+     * Conditions:
+     * - If `size` is zero, will return a zero length buffer.
+     * - If `offset` is greater than file length, will error with code ENOENT to mimic random-access-file.
+     * @param offset Offset to begin reading bytes
+     * @param size The amount of bytes to read
+     * @param cb (error, buffer) =>
+     */
+    read(offset, size, cb) { super.read(offset, size, cb) }
+
+    /**
+     * Deletes `size` amount of bytes starting at `offset`. Any empty chunks are deleted from the underlying database table.
+     * @param offset  Offset to begin deleting bytes from
+     * @param size The amount of bytes to delete
+     * @param cb (error) =>
+     */
+    del(offset, size, cb) { super.del(offset, size, cb) }
+
+    /**
+     * - If `offset` is greater than size of file, will grow the file with empty bytes to that length.
+     * - If `offset` is less than size of file, will delete all data after `offset` and any resulting empty chunks are
+     *   deleted from underlying database table.
+     * - If `offset` is the same, nothing is done to the file.
+     * @param offset Offset to begin aforementioned operations.
+     * @param cb (error) =>
+     */
+    truncate(offset, cb) { super.truncate(offset, cb) }
+
+    /**
+     * Returns an object resulting in the statistics of the file.
+     * For now, only size of file is included which is the same as length property.
+     *
+     * @todo Add metadata to files to include block size, author, creation date, and precalculated hashes.
+     * @param cb (error) =>
+     */
+    stat(cb) { super.stat(cb) }
+
+    /**
+     * Purge the file from the table.
+     * 'Closes' the file from allFilesOpened map.
+     *
+     * @param cb (e) => {}
+     * @returns void
+     */
+    purge(cb) {
         const {
             table
         } = this;
 
-        this.length = 0;
-        table.clear();
+        this.close(() => {
+            this.length = 0;
+            table.clear();
+            cb(null, null)
+        });
     }
 
     _blocks(i, j) {
@@ -420,6 +494,8 @@ class RandomAccessIdb extends RandomAccessStorage {
         allLoadedFiles.delete(key)
         req.callback(null, null);
     }
+
+
 }
 
 export function makeKey(sep, dbName, version, fileName) {

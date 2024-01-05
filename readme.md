@@ -2,9 +2,10 @@
 
 ---
 
-[random-access-storage][1] compatible indexedDB storage layer
 
 ### [API Documentation](https://github.com/zacharygriffee/random-access-idb/blob/master/api.md)
+
+See: [random-access-storage][1] for the full api about what this library derives from.
 
 [1]: https://github.com/random-access-storage/random-access-storage
 
