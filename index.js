@@ -11,7 +11,8 @@ import b4a from "b4a";
 //
 // todo: Error handling testing. Currently, unlikely
 //       indexeddb errors have not been tested
-
+//
+// TODO: Make api sensitive to dexie upgrade changes.
 /**
  * Current default configurations.
  * @type {{chunkSize: number, MapClass: MapConstructor, dbSeparator: string}}
@@ -36,6 +37,15 @@ export function updateDefaultConfig(cb) {
 }
 
 /**
+ * Get a map of all loaded files.
+ * stored by a key with this format by default: dbName\0fileName
+ * So you could do:
+ * allLoadedFiles.get("rai\0helloWorld.txt");
+ */
+export let allLoadedFiles = null;
+let allLoadedDb = null;
+
+/**
  * Create an indexeddb database entry
  *
  * @example // File creation example
@@ -49,51 +59,48 @@ export function updateDefaultConfig(cb) {
  * @param [config.chunkSize=4096] The chunk size of the files created from the created database.
  * When reopened, it should have the same size it was created with.
  * @param [config.size=4096] Alias of {@link config.chunkSize}
- * @param [config.version=1] Default version to open files. You can specify version for each file
- * in the openDatabase~maker function as well.
- * **Don't use decimals in version. Whole numbers only**
- * **Good**: 103254
- * **Bad**: 1.23.521
  *
  * @returns Function<RandomAccessIdb>
  */
 export function openDatabase(dbName = "rai", config = {}) {
-    if (typeof config === "number") config = {chunkSize: config};
     const MapClass = defaultConfig.MapClass;
+    if (typeof config === "number") config = {chunkSize: config};
+    if (!allLoadedDb) allLoadedDb = new MapClass();
+    if (!allLoadedFiles) allLoadedFiles = new MapClass();
+
     const {
-        size,
-        chunkSize = size || defaultConfig.chunkSize,
-        dbSeparator = defaultConfig.dbSeparator,
-        version: dbVersion = 1
+        size, chunkSize = size || defaultConfig.chunkSize, dbSeparator = defaultConfig.dbSeparator, version: dbVersion
     } = config;
 
-    if (!RandomAccessIdb.loadedFiles) RandomAccessIdb.loadedFiles = new MapClass();
-    const db = new Dexie(dbName);
+    Object.defineProperties(maker, {
+        db: {
+            get() {
+                return allLoadedDb.get(dbName)
+            }
+        }
+    });
 
-    maker.db = db;
     return maker;
 
     /**
      * Creates the random access storage instance of a file.
-     * See: https://github.com/random-access-storage/random-access-storage for inherited members.
      * @param fileName
-     * @param version Version of database to open this file from
+     * @property db {Dexie} Dexie database running this maker function.
      * @returns {RandomAccessIdb} RandomAccessIdb class instance
      */
-    function maker(fileName, version = dbVersion) {
-        const key = makeKey(dbSeparator, dbName, version, fileName);
+    function maker(fileName) {
+        const key = b4a.toString(b4a.from(makeKey(dbSeparator, dbName, fileName)), "hex");
         const lengthKey = key + dbSeparator + "length";
-        if (RandomAccessIdb.loadedFiles.has(key)) {
-            return RandomAccessIdb.loadedFiles.get(key);
+
+        if (allLoadedFiles.has(key)) {
+            return allLoadedFiles.get(key);
         }
 
         if (!(this instanceof RandomAccessIdb)) {
             return maker.call(new RandomAccessIdb(), fileName);
         }
 
-        db.version(version).stores({
-            [fileName]: '++chunk,data'
-        });
+        upsertDb(dbName, {[fileName]: '++chunk,data'})
 
         const instance = Object.defineProperties(this, {
             length: {
@@ -109,11 +116,11 @@ export function openDatabase(dbName = "rai", config = {}) {
                 }
             }, db: {
                 get() {
-                    return db
+                    return allLoadedDb.get(dbName)
                 }
             }, table: {
                 get() {
-                    return db[fileName];
+                    return this.db[fileName];
                 }
             }, chunkSize: {
                 get() {
@@ -127,15 +134,34 @@ export function openDatabase(dbName = "rai", config = {}) {
                 get() {
                     return key;
                 }
-            }, version: {
-                get() {
-                    return version
-                }
             }
         });
 
-        RandomAccessIdb.loadedFiles.set(key, instance);
+        allLoadedFiles.set(key, instance);
         return instance;
+    }
+}
+
+// see: https://dexie.org/docs/Dexie/Dexie.open()
+function upsertDb(dbName, changes) {
+    const oldDb = allLoadedDb.get(dbName);
+    oldDb?.close();
+
+    if (!oldDb || oldDb.tables.length === 0) return makeNewDb(1, changes);
+
+    const currentSchema = oldDb.tables.reduce((result, {name, schema}) => {
+        result[name] = [schema.primKey.src, ...schema.indexes.map(idx => idx.src)].join(',');
+        return result;
+    }, {});
+
+    return makeNewDb(oldDb.verno, currentSchema).version(oldDb.verno + 1).stores(changes);
+
+    function makeNewDb(version, changes) {
+        const newDb = new Dexie(dbName);
+        newDb.on('blocked', () => false);
+        newDb.version(version).stores(changes);
+        allLoadedDb.set(dbName, newDb);
+        return newDb;
     }
 }
 
@@ -149,27 +175,21 @@ export function openDatabase(dbName = "rai", config = {}) {
  * Total length of the file
  * @property {String} fileName
  * The fileName of the file
- * @property {Dexie} db
- * The db this file is created under.
- * @property {Dexie.Table} Table
- * The table in the db this file is created.
  * @property {number} chunkSize
  * The chunk size this file is stored on the database.
  * @property {string} dbName
  * The database name this file is stored on.
  * @property {string} key
  * The key this file uses in allLoadedFiles map.
- * @property {number} version
- * The version of the database this file was opened from.
  */
 class RandomAccessIdb extends RandomAccessStorage {
-    static loadedFiles;
-
     /**
      * Open the database table the file exists in
      * @param cb (e) =>
      */
-    open(cb) { super.open(cb) }
+    open(cb) {
+        super.open(cb)
+    }
 
     /**
      * Deletes the file from allLoadedFiles.
@@ -180,7 +200,9 @@ class RandomAccessIdb extends RandomAccessStorage {
      *       database as a whole.
      * @param cb (error) =>
      */
-    close(cb) { super.close(cb) }
+    close(cb) {
+        super.close(cb)
+    }
 
     /**
      * Write `data` starting at `offset`
@@ -191,7 +213,9 @@ class RandomAccessIdb extends RandomAccessStorage {
      * @param data A buffer of `data` to write
      * @param cb (error) =>
      */
-    write(offset, data, cb) { super.write(offset, data, cb) }
+    write(offset, data, cb) {
+        super.write(offset, data, cb)
+    }
 
     /**
      * Read `size` amount of bytes starting from `offset`.
@@ -203,7 +227,9 @@ class RandomAccessIdb extends RandomAccessStorage {
      * @param size The amount of bytes to read
      * @param cb (error, buffer) =>
      */
-    read(offset, size, cb) { super.read(offset, size, cb) }
+    read(offset, size, cb) {
+        super.read(offset, size, cb)
+    }
 
     /**
      * Deletes `size` amount of bytes starting at `offset`. Any empty chunks are deleted from the underlying database table.
@@ -211,7 +237,9 @@ class RandomAccessIdb extends RandomAccessStorage {
      * @param size The amount of bytes to delete
      * @param cb (error) =>
      */
-    del(offset, size, cb) { super.del(offset, size, cb) }
+    del(offset, size, cb) {
+        super.del(offset, size, cb)
+    }
 
     /**
      * - If `offset` is greater than size of file, will grow the file with empty bytes to that length.
@@ -221,23 +249,26 @@ class RandomAccessIdb extends RandomAccessStorage {
      * @param offset Offset to begin aforementioned operations.
      * @param cb (error) =>
      */
-    truncate(offset, cb) { super.truncate(offset, cb) }
+    truncate(offset, cb) {
+        super.truncate(offset, cb)
+    }
 
     /**
-     * Returns an object resulting in the statistics of the file.
+     * Callback returns an object resulting in the statistics of the file.
      * For now, only size of file is included which is the same as length property.
      *
      * @todo Add metadata to files to include block size, author, creation date, and precalculated hashes.
-     * @param cb (error) =>
+     * @param cb (error, stat) =>
      */
-    stat(cb) { super.stat(cb) }
+    stat(cb) {
+        super.stat(cb)
+    }
 
     /**
      * Purge the file from the table.
      * 'Closes' the file from allFilesOpened map.
      *
-     * @param cb (e) => {}
-     * @returns void
+     * @param cb (error) => {}
      */
     purge(cb) {
         const {
@@ -259,10 +290,7 @@ class RandomAccessIdb extends RandomAccessStorage {
     }
 
     async __open() {
-        const {
-            db
-        } = this;
-        if (!db.isOpen()) await db.open();
+        if (!this.db.isOpen()) await this.db.open();
     }
 
     async _open(req) {
@@ -275,6 +303,8 @@ class RandomAccessIdb extends RandomAccessStorage {
     }
 
     async _read(req) {
+        await this.__open();
+
         let {
             offset, size
         } = req;
@@ -284,8 +314,6 @@ class RandomAccessIdb extends RandomAccessStorage {
         const {
             table, length, chunkSize
         } = this;
-
-        await this.__open();
 
         if (length === 0) {
             const error = new Error("No file");
@@ -322,6 +350,8 @@ class RandomAccessIdb extends RandomAccessStorage {
     }
 
     async _write(req) {
+        await this.__open();
+
         const {
             table, chunkSize, length, db
         } = this;
@@ -329,8 +359,6 @@ class RandomAccessIdb extends RandomAccessStorage {
         const {
             offset, data
         } = req;
-
-        await this.__open();
 
         const blocks = this._blocks(offset, offset + data.length);
         const [{block: firstBlock}] = blocks;
@@ -377,6 +405,8 @@ class RandomAccessIdb extends RandomAccessStorage {
     }
 
     async _del(req) {
+        await this.__open();
+
         let {
             offset, size
         } = req;
@@ -384,8 +414,6 @@ class RandomAccessIdb extends RandomAccessStorage {
         const {
             length, table, chunkSize
         } = this;
-
-        await this.__open();
 
         if (size === Number.POSITIVE_INFINITY) size = req.size = length - offset;
 
@@ -433,6 +461,8 @@ class RandomAccessIdb extends RandomAccessStorage {
     }
 
     async _truncate(req) {
+        await this.__open();
+
         const {
             offset
         } = req;
@@ -440,8 +470,6 @@ class RandomAccessIdb extends RandomAccessStorage {
         const {
             length, chunkSize, table
         } = this;
-
-        await this.__open();
 
         if (offset === length) {
             // nothing
@@ -464,8 +492,8 @@ class RandomAccessIdb extends RandomAccessStorage {
             if (blockRange === chunkSize) {
                 await table.delete(firstBlock);
             } else {
-                let truncatedData = b4a.alloc(blockRange);
                 let {data, chunk} = await table.get(firstBlock);
+                let truncatedData = b4a.alloc(blockRange);
                 b4a.copy(truncatedData, data, start, start, blockRange)
                 await table.put({
                     chunk, data
@@ -501,17 +529,9 @@ class RandomAccessIdb extends RandomAccessStorage {
 
 }
 
-export function makeKey(sep, dbName, version, fileName) {
-    return [dbName, version, fileName].join(sep);
+export function makeKey(sep, dbName, fileName) {
+    return [dbName, fileName].join(sep);
 }
-
-/**
- * Get a map of all loaded files.
- * stored by a key with this format by default: dbName\0version\0fileName
- * So you could do:
- * allLoadedFiles.get("rai\01\0helloWorld.txt");
- */
-export const allLoadedFiles = RandomAccessIdb.loadedFiles
 
 let defaultFileMaker;
 

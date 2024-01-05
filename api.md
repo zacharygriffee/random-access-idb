@@ -11,16 +11,11 @@
 <dt><a href="#defaultConfig">defaultConfig</a> : <code>Object</code></dt>
 <dd><p>Current default configurations.</p>
 </dd>
-</dl>
-
-## Constants
-
-<dl>
 <dt><a href="#allLoadedFiles">allLoadedFiles</a></dt>
 <dd><p>Get a map of all loaded files.
-stored by a key with this format by default: dbName\0version\0fileName
+stored by a key with this format by default: dbName\0fileName
 So you could do:
-allLoadedFiles.get(&quot;rai\01\0helloWorld.txt&quot;);</p>
+allLoadedFiles.get(&quot;rai\0helloWorld.txt&quot;);</p>
 </dd>
 </dl>
 
@@ -56,12 +51,9 @@ allLoadedFiles.get(&quot;rai\01\0helloWorld.txt&quot;);</p>
 | --- | --- | --- |
 | length | <code>Number</code> | Total length of the file |
 | fileName | <code>String</code> | The fileName of the file |
-| db | <code>Dexie</code> | The db this file is created under. |
-| Table | <code>Dexie.Table</code> | The table in the db this file is created. |
 | chunkSize | <code>number</code> | The chunk size this file is stored on the database. |
 | dbName | <code>string</code> | The database name this file is stored on. |
 | key | <code>string</code> | The key this file uses in allLoadedFiles map. |
-| version | <code>number</code> | The version of the database this file was opened from. |
 
 
 * [RandomAccessIdb](#RandomAccessIdb) ⇐ <code>RandomAccessStorage</code>
@@ -72,7 +64,7 @@ allLoadedFiles.get(&quot;rai\01\0helloWorld.txt&quot;);</p>
     * [.del(offset, size, cb)](#RandomAccessIdb+del)
     * [.truncate(offset, cb)](#RandomAccessIdb+truncate)
     * [.stat(cb)](#RandomAccessIdb+stat)
-    * [.purge(cb)](#RandomAccessIdb+purge) ⇒
+    * [.purge(cb)](#RandomAccessIdb+purge)
 
 <a name="RandomAccessIdb+open"></a>
 
@@ -171,7 +163,7 @@ Deletes `size` amount of bytes starting at `offset`. Any empty chunks are delete
 <a name="RandomAccessIdb+stat"></a>
 
 ### randomAccessIdb.stat(cb)
-Returns an object resulting in the statistics of the file.
+Callback returns an object resulting in the statistics of the file.
 For now, only size of file is included which is the same as length property.
 
 **Kind**: instance method of [<code>RandomAccessIdb</code>](#RandomAccessIdb)  
@@ -182,20 +174,19 @@ For now, only size of file is included which is the same as length property.
 
 | Param | Description |
 | --- | --- |
-| cb | (error) => |
+| cb | (error, stat) => |
 
 <a name="RandomAccessIdb+purge"></a>
 
-### randomAccessIdb.purge(cb) ⇒
+### randomAccessIdb.purge(cb)
 Purge the file from the table.
 'Closes' the file from allFilesOpened map.
 
 **Kind**: instance method of [<code>RandomAccessIdb</code>](#RandomAccessIdb)  
-**Returns**: void  
 
 | Param | Description |
 | --- | --- |
-| cb | (e) => |
+| cb | (error) => |
 
 <a name="defaultConfig"></a>
 
@@ -207,11 +198,11 @@ Current default configurations.
 
 ## allLoadedFiles
 Get a map of all loaded files.
-stored by a key with this format by default: dbName\0version\0fileName
+stored by a key with this format by default: dbName\0fileName
 So you could do:
-allLoadedFiles.get("rai\01\0helloWorld.txt");
+allLoadedFiles.get("rai\0helloWorld.txt");
 
-**Kind**: global constant  
+**Kind**: global variable  
 <a name="updateDefaultConfig"></a>
 
 ## updateDefaultConfig(cb) ⇒ <code>Promise.&lt;void&gt;</code>
@@ -241,7 +232,6 @@ Create an indexeddb database entry
 | [config] |  | Optional configurations |
 | [config.chunkSize] | <code>4096</code> | The chunk size of the files created from the created database. When reopened, it should have the same size it was created with. |
 | [config.size] | <code>4096</code> | Alias of [config.chunkSize](config.chunkSize) |
-| [config.version] | <code>1</code> | Default version to open files. You can specify version for each file in the openDatabase~maker function as well. **Don't use decimals in version. Whole numbers only** **Good**: 103254 **Bad**: 1.23.521 |
 
 **Example**  
 ```js
@@ -253,17 +243,21 @@ rai.write(0, Buffer.from("hello world!!!"));
 ```
 <a name="openDatabase..maker"></a>
 
-### openDatabase~maker(fileName, version) ⇒ [<code>RandomAccessIdb</code>](#RandomAccessIdb)
+### openDatabase~maker(fileName) ⇒ [<code>RandomAccessIdb</code>](#RandomAccessIdb)
 Creates the random access storage instance of a file.
-See: https://github.com/random-access-storage/random-access-storage for inherited members.
 
 **Kind**: inner method of [<code>openDatabase</code>](#openDatabase)  
 **Returns**: [<code>RandomAccessIdb</code>](#RandomAccessIdb) - RandomAccessIdb class instance  
 
-| Param | Description |
-| --- | --- |
-| fileName |  |
-| version | Version of database to open this file from |
+| Param |
+| --- |
+| fileName | 
+
+**Properties**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| db | <code>Dexie</code> | Dexie database running this maker function. |
 
 <a name="make"></a>
 

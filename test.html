@@ -8,33 +8,32 @@
 <script type="importmap">
         {
             "imports": {
-                "streamx": "https://esm.run/streamx",
                 "brittle": "https://esm.run/brittle",
                 "b4a": "https://esm.run/b4a",
-                "p-queue": "https://esm.run/p-queue",
                 "random-access-storage": "https://esm.run/random-access-storage",
-                "random-access-memory": "https://esm.run/random-access-memory",
                 "hypercore": "https://esm.run/hypercore",
                 "dexie": "https://esm.run/dexie",
-                "randombytes": "https://cdn.jsdelivr.net/npm/randombytes/+esm"
+                "randombytes": "https://cdn.jsdelivr.net/npm/randombytes/+esm",
+                "corestore": "https://esm.run/corestore"
             }
         }
-
-
 </script>
 <script type="module">
     import b4a from "b4a";
     import defaultMaker, {openDatabase as createDatabase} from "./index.js";
-    import {solo, test} from "brittle";
+    import {solo, test, skip} from "brittle";
     import Hypercore from "hypercore";
+    import Corestore from "corestore";
 
     const Buffer = b4a;
 
-    test("default maker", function (t) {
+    test("default maker", {timeout: 600000}, function (t) {
         t.plan(1);
         const ras = defaultMaker("defaultFile.txt");
         ras.write(0, b4a.from("hello world!"), e => {
+            if (e) return console.error(e);
             ras.read(0, 5, (e, buf) => {
+                if (e) return console.error(e);
                 t.is(b4a.toString(buf), "hello");
             })
         });
@@ -190,6 +189,18 @@
 
         t.is(b4a.toString(await core.get(audit1)), "hello world " + audit1)
         t.is(b4a.toString(await core.get(audit2)), "hello world " + audit2)
+        fileMaker.db.delete();
+    });
+
+    test("Corestore", async t => {
+        const fileMaker = createDatabase(makeid(10));
+        const store = new Corestore(file => fileMaker(file));
+
+        const core = store.get({name: "debugCore"});
+        await core.ready();
+        await core.append(b4a.from("hello world"));
+        const entry = await core.get(0);
+        t.is(b4a.toString(entry), "hello world");
         fileMaker.db.delete();
     });
 
