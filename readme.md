@@ -34,7 +34,8 @@ import {openDatabase} from "@zacharygriffee/random-access-idb";
 - Uses battle tested and fast [dexie.js](https://dexie.org/) for indexeddb management
 - Implements `del` and `truncate`, and removes empty chunks from database with these operations.
 - Extends with `purge` to delete a file from the database table.
-- Uses localStorage to store length to reduce slow indexeddb transactions
+- ~~Uses localStorage to store length to reduce slow indexeddb transactions~~
+  - This made it incompatible with web workers and cross-tab/iframe. Length is now stored on the indexeddb as well.
 
 ---
 ## Example
@@ -96,7 +97,6 @@ import {openDatabase} from "@zacharygriffee/random-access-idb";
            indexeddb errors have not been tested
 
      todo: Multiple browser tab support
- 
  */
 ```
 
