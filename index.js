@@ -2,6 +2,9 @@ import Dexie from "dexie";
 import RandomAccessStorage from "random-access-storage";
 import {blocks} from "./lib/blocks.js";
 import b4a from "b4a";
+import {get, set, del} from "idb-keyval";
+
+const dbSeparator = "\0";
 
 // todo: add a file metadata for stats
 //       like block size (chunk size) as to ensure
@@ -13,12 +16,13 @@ import b4a from "b4a";
 //       indexeddb errors have not been tested
 //
 // TODO: Make api sensitive to dexie upgrade changes.
+// TODO: make cross-browser-tab capable
 /**
  * Current default configurations.
  * @type {{chunkSize: number, MapClass: MapConstructor, dbSeparator: string}}
  */
 export let defaultConfig = {
-    chunkSize: 4096, MapClass: Map, dbSeparator: "\0"
+    chunkSize: 4096, MapClass: Map
 };
 
 /**
@@ -69,8 +73,10 @@ export function openDatabase(dbName = "rai", config = {}) {
     if (!allLoadedFiles) allLoadedFiles = new MapClass();
 
     const {
-        size, chunkSize = size || defaultConfig.chunkSize, dbSeparator = defaultConfig.dbSeparator, version: dbVersion
+        size, chunkSize = size || defaultConfig.chunkSize
     } = config;
+
+    const dbSeparator = defaultConfig.dbSeparator;
 
     Object.defineProperties(maker, {
         db: {
@@ -90,7 +96,6 @@ export function openDatabase(dbName = "rai", config = {}) {
      */
     function maker(fileName) {
         const key = b4a.toString(b4a.from(makeKey(dbSeparator, dbName, fileName)), "hex");
-        const lengthKey = key + dbSeparator + "length";
 
         if (allLoadedFiles.has(key)) {
             return allLoadedFiles.get(key);
@@ -103,14 +108,7 @@ export function openDatabase(dbName = "rai", config = {}) {
         upsertDb(dbName, {[fileName]: '++chunk,data'})
 
         const instance = Object.defineProperties(this, {
-            length: {
-                get() {
-                    return Number(localStorage.getItem(lengthKey) || 0);
-                }, set(newLength) {
-                    if (newLength === 0) return localStorage.removeItem(lengthKey);
-                    localStorage.setItem(lengthKey, newLength);
-                }
-            }, fileName: {
+            fileName: {
                 get() {
                     return fileName
                 }
@@ -165,6 +163,27 @@ function upsertDb(dbName, changes) {
     }
 }
 
+async function getLength() {
+    const existingCount = await this.table.count();
+    if (existingCount === 0) {
+        // In case the table for the file was deleted but not the length key.
+        await delLength.bind(this)().catch(_ => {});
+        return this.length = 0;
+    }
+    return this.length = await get(this.key + dbSeparator + "length") || 0;
+}
+
+async function putLength() {
+    if (this.length === 0) {
+        return delLength.bind(this)();
+    }
+    return set(this.key + dbSeparator + "length", this.length)
+}
+
+async function delLength() {
+    return del(this.key + dbSeparator + "length", this.length)
+}
+
 /**
  * @class RandomAccessIdb
  * @extends RandomAccessStorage
@@ -183,6 +202,8 @@ function upsertDb(dbName, changes) {
  * The key this file uses in allLoadedFiles map.
  */
 class RandomAccessIdb extends RandomAccessStorage {
+    length;
+
     /**
      * Open the database table the file exists in
      * @param cb (e) =>
@@ -276,6 +297,7 @@ class RandomAccessIdb extends RandomAccessStorage {
         } = this;
 
         this.close(() => {
+            delLength.bind(this)();
             this.length = 0;
             table.clear();
             cb(null, null)
@@ -296,6 +318,7 @@ class RandomAccessIdb extends RandomAccessStorage {
     async _open(req) {
         try {
             await this.__open();
+            await getLength.bind(this)();
             req.callback(null, null);
         } catch (e) {
             req.callback(e);
@@ -398,7 +421,9 @@ class RandomAccessIdb extends RandomAccessStorage {
             .then(() => {
                 this.length = newLength;
                 req.callback(null);
-            }).catch(e => {
+                putLength.bind(this)()
+            })
+            .catch(e => {
             req.callback(e);
         });
 
@@ -500,6 +525,7 @@ class RandomAccessIdb extends RandomAccessStorage {
                 })
             }
             this.length = offset;
+            putLength.bind(this)();
             req.callback(null, null);
         } catch (e) {
             req.callback(e, null);
@@ -510,7 +536,7 @@ class RandomAccessIdb extends RandomAccessStorage {
         // todo: add metadata to file entry to hold the chunk size (chunk size),
         //       and other information about the file like user specific
         //       data, author, creation time, pre-calculated hashes.
-        this.__open().then(() => req.callback(null, {size: this.length}));
+        getLength.bind(this)().then((len) => req.callback(null, {size: len}));
     }
 
     _close(req) {
