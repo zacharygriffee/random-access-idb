@@ -2,6 +2,12 @@
 
 ---
 
+### Support the cause towards decentralization
+
+bitcoin: bc1q9fpu6muvmg5fj76pyzg3ffjrmksnvfj3c0xva6
+
+---
+
 
 ### [API Documentation](https://github.com/zacharygriffee/random-access-idb/blob/master/api.md)
 
