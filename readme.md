@@ -106,6 +106,12 @@ import {openDatabase} from "@zacharygriffee/random-access-idb";
  */
 ```
 
+## Test it
+
+```sh
+npm test
+```
+
 
 Distributed under the MIT license. See ``LICENSE`` for more information.
 
