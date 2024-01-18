@@ -16,6 +16,19 @@ See: [random-access-storage][1] for the full api about what this library derives
 [1]: https://github.com/random-access-storage/random-access-storage
 
 ---
+## Test it
+
+## In Node
+
+```sh
+npm test
+```
+
+## In Browser
+
+### [Test it in your browser](https://raw.githack.com/zacharygriffee/random-access-idb/6c446e654450df1b2b6c9db378ab39bbe487c2b5/test.html)
+
+---
 
 ## Installation
 
@@ -40,8 +53,6 @@ import {openDatabase} from "@zacharygriffee/random-access-idb";
 - Uses battle tested and fast [dexie.js](https://dexie.org/) for indexeddb management
 - Implements `del` and `truncate`, and removes empty chunks from database with these operations.
 - Extends with `purge` to delete a file from the database table.
-- ~~Uses localStorage to store length to reduce slow indexeddb transactions~~
-  - This made it incompatible with web workers and cross-tab/iframe. Length is now stored on the indexeddb as well.
 
 ---
 ## Example
@@ -91,27 +102,11 @@ import {openDatabase} from "@zacharygriffee/random-access-idb";
 
 ## Todo
 
-```ecmascript 6
-/**
-     todo: add a file metadata for stats
-           like block size (chunk size) as to ensure
-           a file is always opened with
-           its original block size
-           among other stats.
-    
-     todo: Error handling testing. Currently, unlikely
-           indexeddb errors have not been tested
+- [ ] Add a metadata for stats. Block/Chunk size. 
+- [ ] Error handling and testing of errors
+- [ ] Multiple browser tab support
 
-     todo: Multiple browser tab support
- */
-```
-
-## Test it
-
-```sh
-npm test
-```
-
+--- 
 
 Distributed under the MIT license. See ``LICENSE`` for more information.
 

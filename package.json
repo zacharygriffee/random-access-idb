@@ -1,7 +1,7 @@
 {
   "name": "@zacharygriffee/random-access-idb",
   "type": "module",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "main": "index.js",
   "browser": "./dist/index.min.js",
   "description": "A rework of random-access-idb",
