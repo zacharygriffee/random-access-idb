@@ -396,10 +396,10 @@ class RandomAccessIdb extends RandomAccessStorage {
                         throw error;
                     }
                     if (size === Number.POSITIVE_INFINITY) size = length - offset;
-                    if ((length || 0) < offset + size) {
-                        console.error(req, self.fileName);
-                        throw new Error('Could not satisfy length ');
-                    }
+                    // if ((length || 0) < offset + size) {
+                    //     console.error(req, self.fileName);
+                    //     throw new Error('Could not satisfy length ');
+                    // }
                     const blocks = self._blocks(offset, offset + size);
                     const [{block: firstBlock}] = blocks;
                     const {block: lastBlock} = blocks[blocks.length - 1];
