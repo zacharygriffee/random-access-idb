@@ -25,12 +25,8 @@ allLoadedFiles.get(&quot;rai\0helloWorld.txt&quot;);</p>
 <dt><a href="#updateDefaultConfig">updateDefaultConfig(cb)</a> ⇒ <code>Promise.&lt;void&gt;</code></dt>
 <dd><p>Update default configurations for all further database creations.</p>
 </dd>
-<dt><a href="#openDatabase">openDatabase([dbName], [config])</a> ⇒</dt>
-<dd><p>Create an indexeddb database entry</p>
-</dd>
-<dt><a href="#make">make(fileName, config)</a> ⇒ <code><a href="#RandomAccessIdb">RandomAccessIdb</a></code></dt>
-<dd><p>Open database &#39;dbName=rai&#39; then you can create files from the same function.</p>
-<p>This is the same as openDatabase(&quot;rai&quot;)(fileName); or openDatabase()(fileName);</p>
+<dt><a href="#createFile">createFile([fileName], [config])</a> ⇒</dt>
+<dd><p>Create a random access idb instance</p>
 </dd>
 </dl>
 
@@ -52,7 +48,6 @@ allLoadedFiles.get(&quot;rai\0helloWorld.txt&quot;);</p>
 | length | <code>Number</code> | Total length of the file |
 | fileName | <code>String</code> | The fileName of the file |
 | chunkSize | <code>number</code> | The chunk size this file is stored on the database. |
-| dbName | <code>string</code> | The database name this file is stored on. |
 | key | <code>string</code> | The key this file uses in allLoadedFiles map. |
 
 
@@ -80,17 +75,9 @@ Open the database table the file exists in
 <a name="RandomAccessIdb+close"></a>
 
 ### randomAccessIdb.close(cb)
-Deletes the file from allLoadedFiles.
+Closes the file. This allows for other tabs to operate on the file.
 
 **Kind**: instance method of [<code>RandomAccessIdb</code>](#RandomAccessIdb)  
-**Todo**
-
-- [ ] Determine if any further implementation of close is even needed
-      It really makes no sense to me to close the file
-      the only thing I can think of is to keep a count of each file opened
-      per database, and once each file of that database is closed, just close the
-      database as a whole.
-
 
 | Param | Description |
 | --- | --- |
@@ -119,6 +106,8 @@ Write `data` starting at `offset`
 
 ### randomAccessIdb.read(offset, size, cb)
 Read `size` amount of bytes starting from `offset`.
+
+Will reopen the file if it had been closed.
 
 Conditions:
 - If `size` is zero, will return a zero length buffer.
@@ -164,13 +153,9 @@ Deletes `size` amount of bytes starting at `offset`. Any empty chunks are delete
 
 ### randomAccessIdb.stat(cb)
 Callback returns an object resulting in the statistics of the file.
-For now, only size of file is included which is the same as length property.
+{ size, fileName, length, blockSize }
 
 **Kind**: instance method of [<code>RandomAccessIdb</code>](#RandomAccessIdb)  
-**Todo**
-
-- [ ] Add metadata to files to include block size, author, creation date, and precalculated hashes.
-
 
 | Param | Description |
 | --- | --- |
@@ -218,59 +203,29 @@ Update default configurations for all further database creations.
 ```js
 updateDefaultConfig(existingConfig => ({...existingConfig, chunkSize: 1024, MapClass: ObservableMap}));
 ```
-<a name="openDatabase"></a>
+<a name="createFile"></a>
 
-## openDatabase([dbName], [config]) ⇒
-Create an indexeddb database entry
+## createFile([fileName], [config]) ⇒
+Create a random access idb instance
 
 **Kind**: global function  
 **Returns**: Function<RandomAccessIdb>  
 
 | Param | Default | Description |
 | --- | --- | --- |
-| [dbName] | <code>&quot;rai&quot;</code> | The name of the database |
+| [fileName] |  | The name of the file |
 | [config] |  | Optional configurations |
-| [config.chunkSize] | <code>4096</code> | The chunk size of the files created from the created database. When reopened, it should have the same size it was created with. |
+| [config.chunkSize] | <code>4096</code> | The chunk size of the files created from the created database. Chunk size will be stored in the file's metadata and used for the next open. |
 | [config.size] | <code>4096</code> | Alias of [config.chunkSize](config.chunkSize) |
+| [config.openBlockingHandler] |  | Handler in the case that another tab, process, or part of the code tries to open the same file. Default behavior is to close if this instance blocks another instance |
+| [config.openBlockedHandler] |  | If this instance encounters a block by another instance (tab, process, etc), how to handle it. Default, does nothing and waits for the other process to close the file. |
+| [config.deleteBlockingHandler] |  | In the case where this instance wants to delete (purge) the file, but is blocked by another instance operating on it. Default behavior is to do nothing and wait. |
+| [config.MapClass] |  | A custom map class to use for file listing instead of the native map class. Default is native map class. |
 
 **Example**  
 ```js
 // File creation example
 
-const fileMaker = openDatabase();
-const rai = fileMaker("helloWorld.txt");
+const rai = createFile("helloWorld.txt");
 rai.write(0, Buffer.from("hello world!!!"));
 ```
-<a name="openDatabase..maker"></a>
-
-### openDatabase~maker(fileName) ⇒ [<code>RandomAccessIdb</code>](#RandomAccessIdb)
-Creates the random access storage instance of a file.
-
-**Kind**: inner method of [<code>openDatabase</code>](#openDatabase)  
-**Returns**: [<code>RandomAccessIdb</code>](#RandomAccessIdb) - RandomAccessIdb class instance  
-
-| Param |
-| --- |
-| fileName | 
-
-**Properties**
-
-| Name | Type | Description |
-| --- | --- | --- |
-| db | <code>Dexie</code> | Dexie database running this maker function. |
-
-<a name="make"></a>
-
-## make(fileName, config) ⇒ [<code>RandomAccessIdb</code>](#RandomAccessIdb)
-Open database 'dbName=rai' then you can create files from the same function.
-
-This is the same as openDatabase("rai")(fileName); or openDatabase()(fileName);
-
-**Kind**: global function  
-**Returns**: [<code>RandomAccessIdb</code>](#RandomAccessIdb) - RandomAccessIdb instance.  
-
-| Param | Description |
-| --- | --- |
-| fileName | file to create |
-| config | See config for openDatabase function |
-

@@ -39,57 +39,31 @@ npm install @zacharygriffee/random-access-idb --save
 ## Import
 
 ``` ecmascript 6
-import RAI from "@zacharygriffee/random-access-idb";
-
-// or
-
-import {openDatabase} from "@zacharygriffee/random-access-idb";
+import rai from "@zacharygriffee/random-access-idb";
 ```
 ---
 
 ## Improvements
 
 - Uses [b4a](https://github.com/holepunchto/b4a) for buffer operations
-- Uses battle tested and fast [dexie.js](https://dexie.org/) for indexeddb management
-- Implements `del` and `truncate`, and removes empty chunks from database with these operations.
-- Extends with `purge` to delete a file from the database table.
+- Implements `del` and `truncate`, and removes empty chunks from database with these operations
+- Extends with `purge` to delete a file from the database
+- Metadata that holds the chunkSize. IF you `reopen` a file that had a declared chunk size, it will open
+the file in that chunk size despite the configuration.
+- New blocking handlers for multiple tab support. If a file is open in one place, and another place tries to open the same file,
+use the blocking handlers to specify how to handle the conflict
+- Close now has a necessary reason to exist.
 
----
+> !!! NEW BEHAVIOR !!! 
+> 
+> If you plan on using this cross-tab... It is now important to `close` the IDB file when you're done so that
+> other tabs in the same origin can open the file.
+
 ## Example
 
-> When you need complex solutions
-
-``` ecmascript 6
-    import {openDatabase} from "@zacharygriffee/random-access-idb";
-    
-    // Always open the database with the same chunksize it was created with.
-    const margaritaDb = openDatabase("margarita", { chunkSize: 1024 });
-    const martiniDb = openDatabase("martini", { chunkSize: 512 );
-    
-    const goldenMargarita = margaritaDb("goldenMargarita.txt");
-    goldenMargarita.write(0, b4a.from("add orange juice"), (e) => {
-        goldenMargarita.read(4, 6, (e, buffer) => {
-            b4a.toString(buffer); // orange
-        })
-    });
-    
-    const dryGinMartini = martiniDb("dryGinMartini.txt");
-    
-    dryGinMartini.write(0, b4a.from("less vermouth"), (e) => {
-            dryGinMartini.read(5, 8, (e, buffer) => {
-            b4a.toString(buffer); // vermouth
-        })
-    });
-    
-```
-
-## Simple Example
-
-> When your life is simple and don't need all that extra stuff.
 ``` ecmascript 6
     import rai from "@zacharygriffee/random-access-idb";
     
-    // default export is like calling openDatabase('rai')("hello.txt");
     const file = rai("hello.txt");
     file.write(0, b4a.from("hello world"), (e) => {
         file.read(0, 5, (e, buffer) => {
@@ -102,9 +76,9 @@ import {openDatabase} from "@zacharygriffee/random-access-idb";
 
 ## Todo
 
-- [ ] Add a metadata for stats. Block/Chunk size. 
+- [x] Add a metadata for stats. Block/Chunk size. 
 - [ ] Error handling and testing of errors
-- [ ] Multiple browser tab support
+- [x] Multiple browser tab support (needs testing)
 
 --- 
 

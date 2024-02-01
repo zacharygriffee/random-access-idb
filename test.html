@@ -12,16 +12,18 @@
                 "b4a": "https://esm.run/b4a",
                 "random-access-storage": "https://esm.run/random-access-storage",
                 "hypercore": "https://esm.run/hypercore",
-                "dexie": "https://esm.run/dexie",
                 "randombytes": "https://cdn.jsdelivr.net/npm/randombytes/+esm",
                 "corestore": "https://esm.run/corestore",
-                "idb-keyval":"https://esm.run/idb-keyval"
+                "idb": "https://esm.run/idb",
+                "fastq": "https://esm.run/fastq",
+                "tiny-paths": "https://esm.run/tiny-paths"
             }
         }
+
 </script>
 <script type="module">
     import b4a from "b4a";
-    import defaultMaker, {openDatabase as createDatabase} from "./dist/index.min.js";
+    import defaultMaker from "./index.js";
     import {solo, test, skip} from "brittle";
     import Hypercore from "hypercore";
     import Corestore from "corestore";
@@ -39,7 +41,7 @@
             })
         });
         t.teardown(() => {
-            ras.db.delete();
+            ras.purge();
         });
     });
 
@@ -76,11 +78,10 @@
 
     test('write/read big chunks', async function (t) {
         t.plan(1)
-        const {file, close} = newFile();
+        const {file, close} = newFile({chunkSize: 444});
         t.teardown(close);
-        const bigBuffer = Buffer.alloc(300 * 1024)
-
-        bigBuffer.fill('hey. hey. how are you doing?. i am good thanks how about you? i am good')
+        const bigBuffer = Buffer.alloc(300 * 4096)
+        b4a.fill(bigBuffer, 'hey. hey. how are you doing?. i am good thanks how about you? i am good');
 
         const io = t.test('write and read')
         io.plan(6)
@@ -176,9 +177,42 @@
         })
     });
 
+    test("tests", async t => {
+        const ras = defaultMaker("testFile.txt", {chunkSize: 10});
+        await promisify(ras, "write", 0, b4a.from("123456789123456789123456789123456789123456789"));
+        const result1 = await promisify(ras, "read", 1, 4);
+        t.is(b4a.toString(result1), "2345");
+        await promisify(ras, "write", 2, b4a.from("ab"));
+        const result3 = await promisify(ras, "read", 1, 4);
+        t.is(b4a.toString(result3), "2ab5")
+        await promisify(ras, "truncate", 5);
+        await t.exception(() => promisify(ras, "read", 1, 6));
+        await promisify(ras, "truncate", 10);
+        const result4 = await promisify(ras, "read", 1, 6);
+        t.is(b4a.toString(result4), "2ab5\0\0");
+        await promisify(ras, "write", 5, b4a.from("\0z"));
+        const result5 = await promisify(ras, "read", 1, 7);
+        t.is(b4a.toString(result5), "2ab5\0z\0");
+        await promisify(ras, "del", 1, 3);
+        const result6 = await promisify(ras, "read", 0, 10);
+        t.is(b4a.toString(result6), "1\0\0\0" + "5\0z\0\0\0");
+
+        t.teardown(() => ras.purge());
+        // delete the file from the iSource perspective.
+    });
+
     test("basic hypercore with a lot of writes", {timeout: 600000}, async t => {
-        const fileMaker = createDatabase(makeid(10));
-        const core = new Hypercore(file => fileMaker(file));
+        const files = [];
+        const addFile = (file) => {
+            files.push(file);
+            return file
+        };
+        t.teardown(() => {
+            for (const f of files) {
+                f.purge();
+            }
+        });
+        const core = new Hypercore(file => addFile(defaultMaker(file)));
         await core.ready();
         const count = 100;
         const audit1 = random(count);
@@ -190,19 +224,50 @@
 
         t.is(b4a.toString(await core.get(audit1)), "hello world " + audit1)
         t.is(b4a.toString(await core.get(audit2)), "hello world " + audit2)
-        fileMaker.db.delete();
+
+    });
+
+    test("open purge, open purge", async t => {
+        const file = "purgeThis.txt";
+        let ras = defaultMaker(file);
+        let stat = await promisify(ras, "stat");
+        t.is(stat.fileName, "purgeThis.txt");
+        await ras.purge();
+        await t.exception(() => promisify(ras, "stat"));
+        ras = defaultMaker(file);
+        stat = await promisify(ras, "stat");
+        t.is(stat.fileName, "purgeThis.txt");
+        await ras.purge();
+        await t.exception(() => promisify(ras, "stat"));
+        ras = defaultMaker(file);
+        stat = await promisify(ras, "stat");
+        t.is(stat.fileName, "purgeThis.txt");
+        await ras.purge();
+        await t.exception(() => promisify(ras, "stat"));
     });
 
     test("Corestore", async t => {
-        const fileMaker = createDatabase(makeid(10));
-        const store = new Corestore(file => fileMaker(file));
+        const files = [];
+        const addFile = (file) => {
+            files.push(file);
+            return file
+        };
+        t.teardown(() => {
+            for (const f of files) {
+                f.purge();
+            }
+        });
+        const store = new Corestore(file => addFile(defaultMaker(file)));
 
         const core = store.get({name: "debugCore"});
         await core.ready();
         await core.append(b4a.from("hello world"));
         const entry = await core.get(0);
         t.is(b4a.toString(entry), "hello world");
-        fileMaker.db.delete();
+        await core.append(b4a.from("hello world2"));
+        const entry2 = await core.get(1);
+        t.is(b4a.toString(entry2), "hello world2");
+        // fileMaker.db.delete();
     });
 
     test("Test Complete", async t => {
@@ -214,13 +279,12 @@
 
 
     function newFile(config) {
-        const fileMaker = createDatabase(makeid(10), config);
         const randomName1 = makeid(10) + ".txt";
-        const file = fileMaker(randomName1, config);
+        const file = defaultMaker(randomName1, config);
 
         return {
             file,
-            close: () => file.db.delete()
+            close: () => file.purge()
         };
     }
 
@@ -238,6 +302,16 @@
             counter += 1;
         }
         return result;
+    }
+
+    function promisify(o, m, ...args) {
+        const p = new Promise((resolve, reject) => {
+            args.push((e, o) => {
+                e ? reject(e) : resolve(o);
+            });
+        });
+        o[m](...args);
+        return p;
     }
 </script>
 

@@ -1,9 +1,9 @@
 {
   "name": "@zacharygriffee/random-access-idb",
   "type": "module",
-  "version": "2.2.2",
+  "version": "3.0.0",
   "main": "index.js",
-  "browser": "./dist/index.min.js",
+  "browser": "dist/index.min.js",
   "description": "A rework of random-access-idb",
   "fundme": "bc1q9fpu6muvmg5fj76pyzg3ffjrmksnvfj3c0xva6",
   "homepage": "https://github.com/zacharygriffee/random-access-idb#readme",
@@ -14,14 +14,10 @@
   },
   "dependencies": {
     "b4a": "^1.6.4",
-    "dexie": "^3.2.4",
-    "idb-keyval": "^6.2.1",
-    "random-access-storage": "^3.0.1"
-  },
-  "exports": {
-    "default": "./dist/index.min.js",
-    "browser": "./dist/index.min.js",
-    "node": "./index.js"
+    "fastq": "^1.17.0",
+    "idb": "^8.0.0",
+    "random-access-storage": "^3.0.1",
+    "tiny-paths": "^1.0.2"
   },
   "devDependencies": {
     "@rollup/plugin-commonjs": "^25.0.7",

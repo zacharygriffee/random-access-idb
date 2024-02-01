@@ -1,22 +1,126 @@
-import Dexie from "dexie";
 import RandomAccessStorage from "random-access-storage";
 import {blocks} from "./lib/blocks.js";
 import b4a from "b4a";
-import {get, set, del} from "idb-keyval";
+import * as IDB from "idb";
+import path from "tiny-paths";
+import {promise as Q} from "./lib/fastq.js";
 
-const dbSeparator = "\0";
+const queue = Q(
+    async ({task, request}) => {
+        try {
+            const result = await Promise.resolve(task());
+            if (request.callback) await request.callback(null, result);
+        } catch (e) {
+            if (request.callback) return request.callback(e);
+            throw e;
+        }
+    }, 1
+);
 
-// todo: add a file metadata for stats
-//       like block size (chunk size) as to ensure
-//       a file is always opened with
-//       its original block size
-//       among other stats.
-//
+const metaDb = await IDB.openDB("###meta", undefined, {
+    upgrade(db) {
+        const dataStore = db.createObjectStore('meta', {
+            keyPath: 'fileName',
+            autoIncrement: false,
+        });
+
+        dataStore.createIndex("length", "length");
+        dataStore.createIndex("type", "type");
+        dataStore.createIndex("chunkSize", "chunkSize");
+    }
+});
+
+function delMetaOfFile(fileName) {
+    const tx = metaDb.transaction("meta", "readwrite");
+    const store = tx.objectStore('meta');
+    return store.delete(fileName).catch(e => false)
+}
+
+function getMetaOfFile(fileName) {
+    const tx = metaDb.transaction("meta", "readonly");
+    const store = tx.objectStore('meta');
+    return store.get(fileName).catch(e => false)
+}
+
+function setMetaOfFile({fileName, length, ...rest} = {}) {
+    const tx = metaDb.transaction("meta", "readwrite");
+    const store = tx.objectStore("meta");
+    store.put({
+        fileName,
+        length: length || 0,
+        ...rest
+    });
+    return tx.done;
+}
+
+async function openFile(fileName, config = {}) {
+    const {
+        openBlockingHandler,
+        openBlockedHandler
+    } = config;
+    if (fileName === "######meta") {
+        throw new Error("Reserved db name");
+    }
+    return await IDB.openDB(fileName, undefined, {
+        upgrade(db) {
+            const dataStore = db.createObjectStore('chunks', {
+                // The 'id' property of the object will be the key.
+                keyPath: 'chunk',
+                // If it isn't explicitly set, create a value by auto incrementing.
+                autoIncrement: false,
+            });
+
+            dataStore.createIndex("data", "data");
+        },
+        blocking(currentVersion, blockedVersion, event) {
+            openBlockingHandler(currentVersion, blockedVersion, event);
+        },
+        blocked(...args) {
+            openBlockedHandler(...args);
+        }
+    });
+}
+
+async function getChunks(db, range = {}, inclusiveLow = true, inclusiveHigh = true) {
+    const tx = db.transaction("chunks", "readonly");
+    const store = tx.objectStore('chunks');
+
+    let keyRange;
+
+    if (range.end == null)
+        keyRange = IDBKeyRange.lowerBound(range.start, !inclusiveHigh);
+    else if (range.start == null)
+        keyRange = IDBKeyRange.upperBound(range.end, !inclusiveLow);
+    else if (range.start && range.end) {
+        keyRange = IDBKeyRange.bound(range.start, range.end, !inclusiveLow, !inclusiveHigh);
+    } else {
+        keyRange = undefined;
+    }
+
+    return await store.getAll(keyRange);
+}
+
+async function setChunks(db, chunkBook = []) {
+    if (!Array.isArray(chunkBook)) chunkBook = [chunkBook];
+    const tx = db.transaction("chunks", "readwrite");
+    const store = tx.objectStore('chunks');
+    const promises = [];
+    for (const {chunk, data} of chunkBook) {
+        promises.push(
+            store.put(
+                {
+                    chunk,
+                    data
+                }
+            )
+        );
+    }
+    promises.push(tx.done);
+    await Promise.all(promises);
+}
+
 // todo: Error handling testing. Currently, unlikely
 //       indexeddb errors have not been tested
-//
-// TODO: Make api sensitive to dexie upgrade changes.
-// TODO: make cross-browser-tab capable
 /**
  * Current default configurations.
  * @type {{chunkSize: number, MapClass: MapConstructor, dbSeparator: string}}
@@ -47,141 +151,64 @@ export function updateDefaultConfig(cb) {
  * allLoadedFiles.get("rai\0helloWorld.txt");
  */
 export let allLoadedFiles = null;
-let allLoadedDb = null;
-
 /**
- * Create an indexeddb database entry
+ * Create a random access idb instance
  *
  * @example // File creation example
  *
- * const fileMaker = openDatabase();
- * const rai = fileMaker("helloWorld.txt");
+ * const rai = createFile("helloWorld.txt");
  * rai.write(0, Buffer.from("hello world!!!"));
  *
- * @param [dbName="rai"] The name of the database
+ * @param [fileName] The name of the file
  * @param [config] Optional configurations
  * @param [config.chunkSize=4096] The chunk size of the files created from the created database.
- * When reopened, it should have the same size it was created with.
+ * Chunk size will be stored in the file's metadata and used for the next open.
  * @param [config.size=4096] Alias of {@link config.chunkSize}
- *
+ * @param [config.openBlockingHandler] Handler in the case that another tab, process, or part of the code tries to open
+ * the same file. Default behavior is to close if this instance blocks another instance
+ * @param [config.openBlockedHandler] If this instance encounters a block by another instance (tab, process, etc), how
+ * to handle it. Default, does nothing and waits for the other process to close the file.
+ * @param [config.deleteBlockingHandler] In the case where this instance wants to delete (purge) the file, but is blocked
+ * by another instance operating on it. Default behavior is to do nothing and wait.
+ * @param [config.MapClass] A custom map class to use for file listing instead of the native map class. Default is native map class.
+ * @param [config.directory] Put the files into directory.
  * @returns Function<RandomAccessIdb>
  */
-export function openDatabase(dbName = "rai", config = {}) {
-    const MapClass = defaultConfig.MapClass;
-    if (typeof config === "number") config = {chunkSize: config};
-    if (!allLoadedDb) allLoadedDb = new MapClass();
-    if (!allLoadedFiles) allLoadedFiles = new MapClass();
-
+function createFile(fileName, config = {}) {
     const {
-        size, chunkSize = size || defaultConfig.chunkSize
-    } = config;
+        size,
+        chunkSize = size,
+        MapClass,
+        openBlockingHandler = (currVer, blockedVer, event) => event.target.close(),
+        openBlockedHandler,
+        deleteBlockingHandler,
+        prefix,
+        directory = prefix
+    } = ({...defaultConfig, ...config});
+    if (directory) fileName = path.join(directory, path.resolve('/', fileName).replace(/^\w+:\\/, ''))
+    if (!allLoadedFiles) allLoadedFiles = new MapClass();
+    if (allLoadedFiles.has(fileName)) {
+        return allLoadedFiles.get(fileName);
+    }
 
-    const dbSeparator = defaultConfig.dbSeparator;
-
-    Object.defineProperties(maker, {
-        db: {
-            get() {
-                return allLoadedDb.get(dbName)
-            }
-        }
-    });
-
-    return maker;
-
-    /**
-     * Creates the random access storage instance of a file.
-     * @param fileName
-     * @property db {Dexie} Dexie database running this maker function.
-     * @returns {RandomAccessIdb} RandomAccessIdb class instance
-     */
-    function maker(fileName) {
-        const key = b4a.toString(b4a.from(makeKey(dbSeparator, dbName, fileName)), "hex");
-
-        if (allLoadedFiles.has(key)) {
-            return allLoadedFiles.get(key);
+    config.chunkSize ||= chunkSize;
+    const ready = (async () => {
+        const meta = await getMetaOfFile(fileName);
+        if (!meta) {
+            await setMetaOfFile({
+                fileName,
+                length: 0,
+                chunkSize: config.chunkSize
+            });
         }
 
-        if (!(this instanceof RandomAccessIdb)) {
-            return maker.call(new RandomAccessIdb(), fileName);
-        }
+        return await openFile(fileName, {openBlockingHandler, openBlockedHandler, ...config});
+    })();
 
-        upsertDb(dbName, {[fileName]: '++chunk,data'})
-
-        const instance = Object.defineProperties(this, {
-            fileName: {
-                get() {
-                    return fileName
-                }
-            }, db: {
-                get() {
-                    return allLoadedDb.get(dbName)
-                }
-            }, table: {
-                get() {
-                    return this.db[fileName];
-                }
-            }, chunkSize: {
-                get() {
-                    return chunkSize;
-                }
-            }, dbName: {
-                get() {
-                    return dbName;
-                }
-            }, key: {
-                get() {
-                    return key;
-                }
-            }
-        });
-
-        allLoadedFiles.set(key, instance);
-        return instance;
-    }
-}
-
-// see: https://dexie.org/docs/Dexie/Dexie.open()
-function upsertDb(dbName, changes) {
-    const oldDb = allLoadedDb.get(dbName);
-    oldDb?.close();
-
-    if (!oldDb || oldDb.tables.length === 0) return makeNewDb(1, changes);
-
-    const currentSchema = oldDb.tables.reduce((result, {name, schema}) => {
-        result[name] = [schema.primKey.src, ...schema.indexes.map(idx => idx.src)].join(',');
-        return result;
-    }, {});
-
-    return makeNewDb(oldDb.verno, currentSchema).version(oldDb.verno + 1).stores(changes);
-
-    function makeNewDb(version, changes) {
-        const newDb = new Dexie(dbName);
-        newDb.on('blocked', () => false);
-        newDb.version(version).stores(changes);
-        allLoadedDb.set(dbName, newDb);
-        return newDb;
-    }
-}
-
-async function getLength() {
-    const existingCount = await this.table.count();
-    if (existingCount === 0) {
-        // In case the table for the file was deleted but not the length key.
-        await delLength.bind(this)().catch(_ => {});
-        return this.length = 0;
-    }
-    return this.length = await get(this.key + dbSeparator + "length") || 0;
-}
-
-async function putLength() {
-    if (this.length === 0) {
-        return delLength.bind(this)();
-    }
-    return set(this.key + dbSeparator + "length", this.length)
-}
-
-async function delLength() {
-    return del(this.key + dbSeparator + "length", this.length)
+    const ras = new RandomAccessIdb({ready, fileName, ...config});
+    ras.deleteBlockingHandler = deleteBlockingHandler;
+    allLoadedFiles.set(fileName, ras);
+    return ras;
 }
 
 /**
@@ -196,13 +223,37 @@ async function delLength() {
  * The fileName of the file
  * @property {number} chunkSize
  * The chunk size this file is stored on the database.
- * @property {string} dbName
- * The database name this file is stored on.
  * @property {string} key
  * The key this file uses in allLoadedFiles map.
  */
 class RandomAccessIdb extends RandomAccessStorage {
     length;
+
+    constructor({ready, fileName, chunkSize}) {
+        super();
+        this.ready = () => ready;
+        this.fileName = fileName
+        this.chunkSize = chunkSize;
+    }
+
+    async refreshLength() {
+        const meta = await getMetaOfFile(this.fileName);
+        this.length = meta.length;
+    }
+
+    async setLength(length) {
+        this.length = length;
+        return setMetaOfFile({
+            fileName: this.fileName,
+            length,
+            chunkSize: this.chunkSize
+        });
+    }
+
+    async ensureChunkSize() {
+        const meta = await getMetaOfFile(this.fileName);
+        if (meta && meta.chunkSize) this.chunkSize = meta.chunkSize;
+    }
 
     /**
      * Open the database table the file exists in
@@ -213,12 +264,7 @@ class RandomAccessIdb extends RandomAccessStorage {
     }
 
     /**
-     * Deletes the file from allLoadedFiles.
-     * @todo Determine if any further implementation of close is even needed
-     *       It really makes no sense to me to close the file
-     *       the only thing I can think of is to keep a count of each file opened
-     *       per database, and once each file of that database is closed, just close the
-     *       database as a whole.
+     * Closes the file. This allows for other tabs to operate on the file.
      * @param cb (error) =>
      */
     close(cb) {
@@ -240,6 +286,8 @@ class RandomAccessIdb extends RandomAccessStorage {
 
     /**
      * Read `size` amount of bytes starting from `offset`.
+     *
+     * Will reopen the file if it had been closed.
      *
      * Conditions:
      * - If `size` is zero, will return a zero length buffer.
@@ -276,9 +324,8 @@ class RandomAccessIdb extends RandomAccessStorage {
 
     /**
      * Callback returns an object resulting in the statistics of the file.
-     * For now, only size of file is included which is the same as length property.
+     * { size, fileName, length, blockSize }
      *
-     * @todo Add metadata to files to include block size, author, creation date, and precalculated hashes.
      * @param cb (error, stat) =>
      */
     stat(cb) {
@@ -291,17 +338,16 @@ class RandomAccessIdb extends RandomAccessStorage {
      *
      * @param cb (error) => {}
      */
-    purge(cb) {
-        const {
-            table
-        } = this;
-
-        this.close(() => {
-            delLength.bind(this)();
-            this.length = 0;
-            table.clear();
-            cb(null, null)
+    async purge(cb) {
+        const self = this;
+        await new Promise(resolve => this.close(resolve));
+        await IDB.deleteDB(self.fileName, {
+            blocked(...args) {
+                if (self.deleteBlockingHandler) self.deleteBlockingHandler(...args);
+            }
         });
+        await delMetaOfFile(self.fileName);
+        cb?.();
     }
 
     _blocks(i, j) {
@@ -312,132 +358,144 @@ class RandomAccessIdb extends RandomAccessStorage {
     }
 
     async __open() {
-        if (!this.db.isOpen()) await this.db.open();
+        this.db = await this.ready();
+        await this.ensureChunkSize();
+        await this.refreshLength();
     }
 
     async _open(req) {
         try {
             await this.__open();
-            await getLength.bind(this)();
             req.callback(null, null);
         } catch (e) {
             req.callback(e);
         }
     }
 
-    async _read(req) {
-        await this.__open();
+    _read(req) {
+        const self = this;
+        queue.push(
+            {
+                request: req,
+                async task() {
+                    await self.__open();
 
-        let {
-            offset, size
-        } = req;
+                    let {
+                        offset, size
+                    } = req;
 
-        if (size === 0) return req.callback(null, b4a.alloc(0));
+                    if (size === 0) return b4a.alloc(0);
 
-        const {
-            table, length, chunkSize
-        } = this;
+                    const {
+                        db, length
+                    } = self;
 
-        if (length === 0) {
-            const error = new Error("No file");
-            error.code = "ENOENT";
-            return req.callback(error, null);
-        }
-        if (size === Number.POSITIVE_INFINITY) size = length - offset;
+                    if (length === 0) {
+                        const error = new Error("No file");
+                        error.code = "ENOENT";
+                        throw error;
+                    }
+                    if (size === Number.POSITIVE_INFINITY) size = length - offset;
+                    if ((length || 0) < offset + size) {
+                        throw new Error('Could not satisfy length');
+                    }
+                    const blocks = self._blocks(offset, offset + size);
+                    const [{block: firstBlock}] = blocks;
+                    const {block: lastBlock} = blocks[blocks.length - 1];
 
-        if ((length || 0) < offset + size) {
-            return req.callback(new Error('Could not satisfy length'))
-        }
+                    const chunks = await getChunks(db, {
+                        start: firstBlock,
+                        end: lastBlock
+                    }, true, true);
 
-        const blocks = this._blocks(offset, offset + size);
-        const [{block: firstBlock}] = blocks;
-        const {block: lastBlock} = blocks[blocks.length - 1];
+                    let cursor = 0;
 
-        let cursor = 0;
-        try {
-            const bufferObject = (await table.where("chunk")
-                .between(firstBlock, lastBlock, true, true)
-                .toArray())
-                .reduce((acc, {data, chunk}) => {
-                    cursor = chunk - firstBlock;
-                    const {start, end} = blocks[cursor];
-                    acc[chunk] = b4a.from(data.slice(start, end));
-                    return acc;
-                }, {});
-
-
-            req.callback(null, b4a.concat(blocks.map((o) => bufferObject[o.block] || b4a.alloc(chunkSize))));
-        } catch (e) {
-            req.callback(e);
-        }
+                    const map = [];
+                    for (const {data, chunk} of Object.values(chunks)) {
+                        cursor = chunk - firstBlock;
+                        if (!blocks[cursor]) {
+                            continue;
+                        }
+                        const {start, end} = blocks[cursor];
+                        map[cursor] = b4a.from(data.slice(start, end));
+                    }
+                    return b4a.concat(map);
+                }
+            }
+        )
     }
 
-    async _write(req) {
-        await this.__open();
-
+    _write(req) {
+        const self = this;
         const {
-            table, chunkSize, length, db
-        } = this;
+            chunkSize, length, db
+        } = self;
 
         const {
             offset, data
         } = req;
 
-        const blocks = this._blocks(offset, offset + data.length);
-        const [{block: firstBlock}] = blocks;
-        const {block: lastBlock} = blocks[blocks.length - 1];
-        let newLength;
+        queue.push({
+            request: req,
+            async task() {
+                const blocks = self._blocks(offset, offset + data.length);
+                const [{block: firstBlock}] = blocks;
+                const {block: lastBlock} = blocks[blocks.length - 1];
+                let newLength;
 
-        db.transaction("readwrite", table, async function () {
-            const chunks = (await table.where("chunk")
-                .between(firstBlock, lastBlock, true, true)
-                .toArray())
-                .map(({data}) => data);
+                const chunks = await getChunks(db, {
+                    start: firstBlock,
+                    end: lastBlock
+                }, true, true);
 
-            let cursor = 0;
-            let i = 0;
-            const ops = [];
-
-
-            for (const {block, start, end} of blocks) {
-                const blockPos = i++;
-                const blockRange = end - start;
-
-                if (blockRange === chunkSize) {
-                    chunks[blockPos] = b4a.from(data.slice(cursor, cursor + blockRange));
-                } else {
-                    chunks[blockPos] ||= b4a.from(b4a.alloc(chunkSize));
-                    b4a.copy(b4a.from(data), chunks[blockPos], start, cursor, cursor + blockRange);
+                for (let [key, value] of Object.entries(chunks)) {
+                    chunks[key] = value?.data;
                 }
 
-                ops.push({chunk: block, data: b4a.from(chunks[blockPos])});
+                let cursor = 0;
+                let i = 0;
 
-                cursor += blockRange;
+                const tx = db.transaction("chunks", "readwrite");
+                const store = tx.objectStore('chunks');
+
+                for (const {block, start, end} of blocks) {
+                    const blockPos = i++;
+                    const blockRange = end - start;
+
+                    if (blockRange === chunkSize) {
+                        chunks[blockPos] = b4a.from(data.slice(cursor, cursor + blockRange));
+                    } else {
+                        // if (this.fileName.includes("tree")) {
+                        //     console.log("Tree set data", {cursor, blockRange, data},  {block, start, end});
+                        // }
+                        chunks[blockPos] ||= b4a.from(b4a.alloc(chunkSize));
+                        b4a.copy(b4a.from(data), chunks[blockPos], start, cursor, cursor + blockRange);
+                    }
+
+                    // ops[block] = {chunk: block, data:  b4a.from(chunks[blockPos])};
+                    await store.put({chunk: block, data: b4a.from(chunks[blockPos])});
+                    cursor += blockRange;
+                }
+
+                newLength = Math.max(length || 0, offset + data.length);
+                // await setChunks(db, ops);/
+                await tx.done;
+                await self.setLength(newLength);
+                return null;
             }
-
-            newLength = Math.max(length || 0, offset + data.length);
-            await table.bulkPut(ops);
-        })
-            .then(() => {
-                this.length = newLength;
-                req.callback(null);
-                putLength.bind(this)()
-            })
-            .catch(e => {
-            req.callback(e);
         });
-
     }
 
-    async _del(req) {
-        await this.__open();
+    _del(req) {
+        // await this.__open();
 
+        const self = this;
         let {
             offset, size
         } = req;
 
         const {
-            length, table, chunkSize
+            length, db, chunkSize
         } = this;
 
         if (size === Number.POSITIVE_INFINITY) size = req.size = length - offset;
@@ -450,50 +508,56 @@ class RandomAccessIdb extends RandomAccessStorage {
             return this._truncate(req);
         }
 
-        const blocks = this._blocks(offset, offset + size);
-        const firstBlock = blocks.shift();
-        const lastBlock = blocks.pop() || firstBlock;
-        const deleteBlockCount = lastBlock.block - firstBlock.block;
+        queue.push(
+            {
+                request: req,
+                async task() {
+                    const blocks = self._blocks(offset, offset + size);
+                    const firstBlock = blocks.shift();
+                    const lastBlock = blocks.pop() || firstBlock;
+                    const deleteBlockCount = lastBlock.block - firstBlock.block;
 
-        if (deleteBlockCount > 1) {
-            // Delete anything in between.
-            await table.where("chunk")
-                .between(firstBlock.block, lastBlock.block, false, false)
-                .delete();
-        }
+                    if (deleteBlockCount > 1) {
+                        // Delete anything in between.
+                        await getChunks(db, {
+                            start: firstBlock.block,
+                            end: lastBlock.block
+                        }, false, false);
+                    }
 
-        // handle the edges
-        const [first, last] = await table.where("chunk")
-            .between(firstBlock.block, lastBlock.block, true, true)
-            .toArray();
+                    const {0: first, 1: last} = await getChunks(db, {
+                        start: firstBlock.block,
+                        end: lastBlock.block
+                    }, true, true);
 
 
-        if (first) {
-            const end = last ? firstBlock.end : firstBlock.end - firstBlock.start;
-            const empty = b4a.alloc(end);
-            b4a.copy(empty, first.data, firstBlock.start);
-            await table.put(first);
-        }
+                    if (first) {
+                        const end = last ? firstBlock.end : firstBlock.end - firstBlock.start;
+                        const empty = b4a.alloc(end);
+                        b4a.copy(empty, first.data, firstBlock.start);
+                        await setChunks(db, first);
+                    }
 
-        if (last) {
-            const end = Math.min(lastBlock.end, chunkSize);
-            const empty = b4a.alloc(end);
-            b4a.copy(empty, last.data, lastBlock.start);
-            await table.put(last);
-        }
-
-        req.callback(null);
+                    if (last) {
+                        const end = Math.min(lastBlock.end, chunkSize);
+                        const empty = b4a.alloc(end);
+                        b4a.copy(empty, last.data, lastBlock.start);
+                        await setChunks(db, last);
+                    }
+                }
+            }
+        );
     }
 
-    async _truncate(req) {
-        await this.__open();
-
+    _truncate(req) {
+        // await this.__open();
+        const self = this;
         const {
             offset
         } = req;
 
         const {
-            length, chunkSize, table
+            length, chunkSize, db
         } = this;
 
         if (offset === length) {
@@ -503,80 +567,83 @@ class RandomAccessIdb extends RandomAccessStorage {
             // grow
             return this.write(length, b4a.alloc(req.offset - length), (err) => {
                 if (err) return req.callback(err, null);
-                req.callback(null, null);
+                return req.callback(null, null);
             });
         }
 
-        // Shrink
-        const blocks = this._blocks(offset, length);
-        const [{block: firstBlock, start, end}] = blocks;
+        queue.push({
+            request: req,
+            async task() {
 
-        try {
-            await table.where("chunk").above(firstBlock).delete();
-            const blockRange = end - start;
-            if (blockRange === chunkSize) {
-                await table.delete(firstBlock);
-            } else {
-                let {data, chunk} = await table.get(firstBlock);
-                let truncatedData = b4a.alloc(blockRange);
-                b4a.copy(truncatedData, data, start, start, blockRange)
-                await table.put({
-                    chunk, data
-                })
+                // Shrink
+                const blocks = self._blocks(offset, length);
+                const [{block: firstBlock, start, end}] = blocks;
+
+                const [firstChunk, ...restChunks] = await getChunks(db, {
+                    start: firstBlock
+                }, true);
+                const tx = db.transaction("chunks", "readwrite");
+                const store = tx.objectStore('chunks');
+                if (restChunks.length > 0) {
+                    const ops = [];
+                    for (const chunk of restChunks) {
+                        ops.push(
+                            store.delete(chunk.chunk)
+                        );
+                    }
+                    await Promise.all(ops);
+                }
+
+                const blockRange = end - start;
+                if (blockRange === chunkSize) {
+                    await store.delete(firstBlock);
+                } else {
+                    let {data, chunk} = firstChunk;
+                    let truncatedData = b4a.alloc(blockRange);
+                    b4a.copy(truncatedData, data, start, start, blockRange)
+                    await store.put({
+                        chunk, data
+                    });
+                }
+                await tx.done;
+                await self.setLength(offset);
+                return null;
             }
-            this.length = offset;
-            putLength.bind(this)();
-            req.callback(null, null);
-        } catch (e) {
-            req.callback(e, null);
-        }
+        })
+
     }
 
     _stat(req) {
-        // todo: add metadata to file entry to hold the chunk size (chunk size),
-        //       and other information about the file like user specific
-        //       data, author, creation time, pre-calculated hashes.
-        getLength.bind(this)().then((len) => req.callback(null, {size: len}));
+        const self = this;
+
+        queue.push({
+            request: req,
+            async task() {
+                await self.ready();
+                const stat = await getMetaOfFile(self.fileName);
+                return {
+                    ...stat,
+                    size: stat.length
+                }
+            }
+        })
+
     }
 
     _close(req) {
         const {
-            key
+            fileName, db
         } = this;
-        // It really makes no sense to me to close the file
-        // the only thing I can think of is to keep a count of each file opened
-        // per database, and once each file of that database is closed, just close the
-        // database as a whole. But, I really don't see why unless someone can
-        // enlighten me.
-        allLoadedFiles.delete(key)
-        req.callback(null, null);
+        queue.push({
+            async task() {
+                db.close();
+                allLoadedFiles.delete(fileName)
+            },
+            request: req
+        });
     }
-
-
 }
 
-export function makeKey(sep, dbName, fileName) {
-    return [dbName, fileName].join(sep);
-}
 
-let defaultFileMaker;
-
-/**
- * Open database 'dbName=rai' then you can create files from the same function.
- *
- * This is the same as openDatabase("rai")(fileName); or openDatabase()(fileName);
- *
- * @function make
- * @param fileName file to create
- * @param config See config for openDatabase function
- * @returns {RandomAccessIdb} RandomAccessIdb instance.
- */
-export default function make(fileName, config = {}) {
-    if (!defaultFileMaker?.db.isOpen()) {
-        defaultFileMaker = openDatabase(undefined, config);
-    }
-
-    return defaultFileMaker(fileName);
-};
-
-export {make};
+export default createFile;
+export {createFile};
