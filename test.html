@@ -14,9 +14,11 @@
                 "hypercore": "https://esm.run/hypercore",
                 "randombytes": "https://cdn.jsdelivr.net/npm/randombytes/+esm",
                 "corestore": "https://esm.run/corestore",
+                "hyperdrive": "https://esm.run/hyperdrive",
                 "idb": "https://esm.run/idb",
                 "fastq": "https://esm.run/fastq",
-                "tiny-paths": "https://esm.run/tiny-paths"
+                "tiny-paths": "https://esm.run/tiny-paths",
+                "BYOSU": "https://cdn.jsdelivr.net/npm/bring-your-own-storage-utilities@0.0.1310/dist/all.min.js"
             }
         }
 
@@ -27,6 +29,9 @@
     import {solo, test, skip} from "brittle";
     import Hypercore from "hypercore";
     import Corestore from "corestore";
+    import Hyperdrive from "hyperdrive";
+    import * as BYOSU from "BYOSU";
+
 
     const Buffer = b4a;
 
@@ -246,7 +251,7 @@
         await t.exception(() => promisify(ras, "stat"));
     });
 
-    solo("Corestore", async t => {
+    test("Corestore", async t => {
         const files = [];
         const addFile = (file) => {
             files.push(file);
@@ -254,7 +259,7 @@
         };
         t.teardown(() => {
             for (const f of files) {
-                // f.purge();
+                f.purge();
             }
         });
         const store = new Corestore(file => addFile(defaultMaker(file)));
@@ -267,7 +272,29 @@
         await core.append(b4a.from("hello world2"));
         const entry2 = await core.get(1);
         t.is(b4a.toString(entry2), "hello world2");
-        // fileMaker.db.delete();
+    });
+
+    solo("Hyperdrive", async t => {
+        const files = [];
+        const addFile = (file) => {
+            files.push(file);
+            return file
+        };
+        t.teardown(() => {
+            for (const f of files) {
+                // f.purge();
+            }
+        });
+        const store = new Corestore(file => addFile(defaultMaker(file, {directory: "/somedir"})));
+        const hyperdrive = new Hyperdrive(store);
+        const iDrive = BYOSU.Adapt.iSource(hyperdrive);
+
+        await iDrive.put("hello.txt", b4a.from("helloWorld"));
+        const result = await iDrive.get("hello.txt");
+        t.is(b4a.toString(result), "helloWorld");
+        await iDrive.put("hello2.txt", b4a.from("helloWorld2"));
+        const result2 = await iDrive.get("hello2.txt");
+        t.is(b4a.toString(result2), "helloWorld2");
     });
 
     test("Test Complete", async t => {

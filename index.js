@@ -622,6 +622,7 @@ class RandomAccessIdb extends RandomAccessStorage {
             async task() {
                 await self.ready();
                 const stat = await getMetaOfFile(self.fileName);
+                console.log("Getting stat", stat, stat.length, self.fileName);
                 return {
                     ...stat,
                     size: stat.length
@@ -645,6 +646,22 @@ class RandomAccessIdb extends RandomAccessStorage {
     }
 }
 
+// export function createSource() {
+//     return {
+//         async get(fileName, config = {}) {
+//             return createFile(fileName, config)
+//         },
+//         async del(fileName, config = {}) {
+//             if(allLoadedFiles.has(fileName)) {
+//                 await allLoadedFiles.get(fileName).purge();
+//             }
+//         },
+//         async put(fileName, data, config = {}) {
+//             const ras = createFile(fileName, config);
+//             return new Promise((resolve, reject) => ras.write(0, data, (e) => e ? reject(e) : resolve()));
+//         }
+//     }
+// }
 
 export default createFile;
 export {createFile};
