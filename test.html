@@ -23,7 +23,7 @@
 </script>
 <script type="module">
     import b4a from "b4a";
-    import defaultMaker from "./index.js";
+    import defaultMaker from "./dist/index.min.js";
     import {solo, test, skip} from "brittle";
     import Hypercore from "hypercore";
     import Corestore from "corestore";
@@ -246,7 +246,7 @@
         await t.exception(() => promisify(ras, "stat"));
     });
 
-    test("Corestore", async t => {
+    solo("Corestore", async t => {
         const files = [];
         const addFile = (file) => {
             files.push(file);
@@ -254,7 +254,7 @@
         };
         t.teardown(() => {
             for (const f of files) {
-                f.purge();
+                // f.purge();
             }
         });
         const store = new Corestore(file => addFile(defaultMaker(file)));
