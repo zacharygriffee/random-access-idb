@@ -26,7 +26,7 @@ npm test
 
 ## In Browser
 
-### [Test it in your browser](https://raw.githack.com/zacharygriffee/random-access-idb/6c446e654450df1b2b6c9db378ab39bbe487c2b5/test.html)
+### [Test it in your browser](https://raw.githack.com/zacharygriffee/random-access-idb/master/test.html)
 
 ---
 
