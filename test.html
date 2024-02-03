@@ -11,6 +11,7 @@
                 "brittle": "https://esm.run/brittle",
                 "b4a": "https://esm.run/b4a",
                 "random-access-storage": "https://esm.run/random-access-storage",
+                "random-access-memory": "https://esm.run/random-access-memory",
                 "hypercore": "https://esm.run/hypercore",
                 "randombytes": "https://cdn.jsdelivr.net/npm/randombytes/+esm",
                 "corestore": "https://esm.run/corestore",
@@ -18,9 +19,12 @@
                 "idb": "https://esm.run/idb",
                 "fastq": "https://esm.run/fastq",
                 "tiny-paths": "https://esm.run/tiny-paths",
-                "BYOSU": "https://cdn.jsdelivr.net/npm/bring-your-own-storage-utilities@0.0.1310/dist/all.min.js"
+                "BYOSU": "https://cdn.jsdelivr.net/npm/bring-your-own-storage-utilities@0.0.1310/dist/all.min.js",
+                "hyperswarm": "https://esm.run/hyperswarm",
+                "dht": "./dht-ws-client.dist.js"
             }
         }
+
 
 </script>
 <script type="module">
@@ -30,10 +34,76 @@
     import Hypercore from "hypercore";
     import Corestore from "corestore";
     import Hyperdrive from "hyperdrive";
+    import Hyperswarm from "hyperswarm";
+    import {RelayedDHT, WebSocketStream} from "dht"
+    import RAM from "random-access-memory";
     import * as BYOSU from "BYOSU";
 
+    const dht1 = new RelayedDHT(
+        new WebSocketStream(true, new WebSocket("ws://127.0.0.1:42001/hyper"))
+    );
+    const dht2 = new RelayedDHT(
+        new WebSocketStream(true, new WebSocket("ws://127.0.0.1:42001/hyper"))
+    );
 
     const Buffer = b4a;
+
+    skip("truncate shrink", async t => {
+        const ras = defaultMaker("truncateShrink.txt");
+        ras.write(0, b4a.from("hello world!"), (e) => {
+            ras.truncate(3, (e) => {
+                debugger;
+                ras.stat((e, stat) => {
+                    debugger;
+                    ras.read(0, 4, (e, buf) => {
+                        console.log(b4a.toString(buf));
+                            debugger;
+                        }
+                    );
+                })
+            })
+        });
+    })
+
+    solo("replicate corestore test", {timeout: 600000}, async t => {
+        t.plan(1)
+        // const cs1 = new Corestore(() => new RAM());
+        const cs1 = new Corestore(file => defaultMaker(file, {directory: "/local/"}));
+        const cs2 = new Corestore(file => defaultMaker(file, {directory: "/remote/"}));
+
+        // const cs2 = new Corestore(() => new RAM());
+
+        const drive1 = new Hyperdrive(cs1);
+        await drive1.ready();
+        const drive2 = new Hyperdrive(cs2, drive1.key);
+        const swarm1 = new Hyperswarm({dht: dht1});
+        const swarm2 = new Hyperswarm({dht: dht2});
+
+        swarm1.on("connection", socket => {
+            console.log("swarm1 connection");
+            cs1.replicate(socket);
+        });
+
+        swarm2.on("connection", async socket => {
+            console.log("swarm2 connection");
+            cs2.replicate(socket);
+        });
+
+        swarm1.join(drive1.discoveryKey);
+        swarm2.join(drive1.discoveryKey);
+
+        console.log("Putting");
+        await drive1.put("./hello.txt", b4a.from("hello!"));
+
+        await drive2.getBlobs();
+        console.log("Put, getBlobs");
+        const result = await drive2.get("./hello.txt");
+        console.log(">>>>>>>", result);
+        // t.pass();
+        // await t;
+        // debugger;
+    });
+
 
     test("default maker", {timeout: 600000}, function (t) {
         t.plan(1);
@@ -83,7 +153,7 @@
 
     test('write/read big chunks', async function (t) {
         t.plan(1)
-        const {file, close} = newFile({chunkSize: 444});
+        const {file, close} = newFile();
         t.teardown(close);
         const bigBuffer = Buffer.alloc(300 * 4096)
         b4a.fill(bigBuffer, 'hey. hey. how are you doing?. i am good thanks how about you? i am good');
@@ -116,7 +186,7 @@
         const bigBuffer = Buffer.alloc(200 * 1024)
         let same = true
 
-        bigBuffer.fill('hey. hey. how are you doing?. i am good thanks how about you? i am good')
+        b4a.fill(bigBuffer, 'hey. hey. how are you doing?. i am good thanks how about you? i am good');
 
         file.write(0, bigBuffer, function () {
             let offset = 0
@@ -274,7 +344,7 @@
         t.is(b4a.toString(entry2), "hello world2");
     });
 
-    solo("Hyperdrive", async t => {
+    test("Hyperdrive", async t => {
         const files = [];
         const addFile = (file) => {
             files.push(file);

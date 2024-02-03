@@ -1,7 +1,7 @@
 {
   "name": "@zacharygriffee/random-access-idb",
   "type": "module",
-  "version": "3.0.5",
+  "version": "3.1.0",
   "main": "index.js",
   "browser": "dist/index.min.js",
   "description": "A rework of random-access-idb",
@@ -16,7 +16,7 @@
     "b4a": "^1.6.4",
     "fastq": "^1.17.0",
     "idb": "^8.0.0",
-    "random-access-storage": "^3.0.1",
+    "tiny-emitter": "^2.1.0",
     "tiny-paths": "^1.0.2"
   },
   "devDependencies": {
@@ -24,5 +24,8 @@
     "@rollup/plugin-terser": "^0.4.4",
     "bring-your-own-storage-utilities": "^0.0.1108",
     "localdrive": "^1.11.1"
+  },
+  "peerDependencies": {
+    "random-access-storage": "^3.0.1"
   }
 }
