@@ -24,7 +24,7 @@ await pack("./index.js", "./dist/index.min.js", {
     plugins: [
         rollupFromSourcePlugin(projectFolder),
         commonjs(),
-        terser()
+        // terser()
     ]
 });
 

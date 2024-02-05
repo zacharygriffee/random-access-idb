@@ -35,7 +35,7 @@
     import Corestore from "corestore";
     import Hyperdrive from "hyperdrive";
     import Hyperswarm from "hyperswarm";
-    import {RelayedDHT, WebSocketStream} from "dht"
+    import {RelayedDHT, WebSocketStream, DHT} from "dht"
     import RAM from "random-access-memory";
     import * as BYOSU from "BYOSU";
 
@@ -68,9 +68,10 @@
     solo("replicate corestore test", {timeout: 600000}, async t => {
         t.plan(1)
         // const cs1 = new Corestore(() => new RAM());
-        const cs1 = new Corestore(file => defaultMaker(file, {directory: "/local/"}));
-        const cs2 = new Corestore(file => defaultMaker(file, {directory: "/remote/"}));
-
+        const kp1 = DHT.keyPair(b4a.fill(b4a.alloc(32), "local"));
+        const kp2 = DHT.keyPair(b4a.fill(b4a.alloc(32), "remote"));
+        const cs1 = new Corestore(file => defaultMaker(file, {directory: "/local/"}), {primaryKey: kp1.secretKey});
+        const cs2 = new Corestore(file => defaultMaker(file, {directory: "/remote/"}), {primaryKey: kp2.secretKey});
         // const cs2 = new Corestore(() => new RAM());
 
         const drive1 = new Hyperdrive(cs1);
@@ -78,6 +79,7 @@
         const drive2 = new Hyperdrive(cs2, drive1.key);
         const swarm1 = new Hyperswarm({dht: dht1});
         const swarm2 = new Hyperswarm({dht: dht2});
+        const fp = drive2.findingPeers();
 
         swarm1.on("connection", socket => {
             console.log("swarm1 connection");
@@ -88,18 +90,29 @@
             console.log("swarm2 connection");
             cs2.replicate(socket);
         });
+        console.log(drive1.discoveryKey);
 
-        swarm1.join(drive1.discoveryKey);
+        await swarm1.join(drive1.discoveryKey).flushed();
         swarm2.join(drive1.discoveryKey);
 
         console.log("Putting");
-        await drive1.put("./hello.txt", b4a.from("hello!"));
+        swarm2.flush().then(fp, fp);
+        await drive1.put(`./hello1.txt`, b4a.from(`hello 1!`));
+        // for (let i = 0; i < 100; i++) {
+        //     await drive1.put(`./hello${i}.txt`, b4a.from(`hello ${i}!`));
+        // }
 
-        await drive2.getBlobs();
-        console.log("Put, getBlobs");
-        const result = await drive2.get("./hello.txt");
-        console.log(">>>>>>>", result);
-        // t.pass();
+        await drive2.update();
+        // await drive2.source.download();
+        // console.log("Put, getBlobs");
+        const result = await drive2.get(`./hello1.txt`);
+        console.log(">>>>>>>", b4a.toString(result));
+        // for (let i = 0; i < 100; i++) {
+        //     const result = await drive2.get(`./hello${i}.txt`);
+        //     console.log(">>>>>>>", b4a.toString(result));
+        // }
+
+        t.pass();
         // await t;
         // debugger;
     });

@@ -21,32 +21,34 @@ const metaDb = await IDB.openDB("###meta", undefined, {
 function delMetaOfFile(fileName) {
     const tx = metaDb.transaction("meta", "readwrite");
     const store = tx.objectStore('meta');
-    return store.delete(fileName).catch(e => {
+    return store.delete(fileName).then(async (x) => {
+        await tx.done;
+        return x;
+    }).catch(e => {
         console.log("Failed to del meta", e);
         return false;
-    })
+    });
 }
 
 function getMetaOfFile(fileName) {
     const tx = metaDb.transaction("meta", "readonly");
     const store = tx.objectStore('meta');
-    if (!fileName) {
-        debugger;
-    }
-    return store.get(fileName).catch(e => {
+
+    return store.get(fileName).then(
+        async (result) => {
+            await tx.done
+            return result;
+        }
+    ).catch(e => {
         console.log("Failed to get meta", e);
         return false;
     })
 }
 
-async function setMetaOfFile({fileName, length, ...rest} = {}) {
+async function setMetaOfFile(meta) {
     const tx = metaDb.transaction("meta", "readwrite");
     const store = tx.objectStore("meta");
-    await store.put({
-        fileName,
-        length: length || 0,
-        ...rest
-    });
+    await store.put(meta);
     return tx.done;
 }
 
@@ -94,7 +96,9 @@ async function getChunks(db, range = {}, inclusiveLow = true, inclusiveHigh = tr
         keyRange = undefined;
     }
 
-    return await store.getAll(keyRange);
+    const results = await store.getAll(keyRange);
+    await tx.done;
+    return results;
 }
 
 async function setChunks(db, chunkBook = []) {
@@ -143,9 +147,6 @@ export function updateDefaultConfig(cb) {
 
 /**
  * Get a map of all loaded files.
- * stored by a key with this format by default: dbName\0fileName
- * So you could do:
- * allLoadedFiles.get("rai\0helloWorld.txt");
  */
 export let allLoadedFiles = null;
 
@@ -179,6 +180,7 @@ function createFile(fileName, config = {}) {
         MapClass,
         openBlockingHandler = (currVer, blockedVer, event) => {
             console.warn("Closed due to blocking.", fileName);
+            allLoadedFiles.get(fileName)?.close();
             return event.target.close();
         },
         openBlockedHandler,
@@ -198,18 +200,7 @@ function createFile(fileName, config = {}) {
     }
 
     config.chunkSize ||= chunkSize;
-    const ready = (async () => {
-        const meta = await getMetaOfFile(fileName);
-        if (!meta) {
-            await setMetaOfFile({
-                fileName,
-                length: 0,
-                chunkSize: config.chunkSize
-            });
-        }
-
-        return await openFile(fileName, {openBlockingHandler, openBlockedHandler, ...config});
-    })();
+    const ready = () => openFile(fileName, {openBlockingHandler, openBlockedHandler, ...config});
 
     const ras = new RandomAccessIdb({ready, fileName, ...config});
     ras.deleteBlockingHandler = deleteBlockingHandler;
@@ -231,49 +222,69 @@ function createFile(fileName, config = {}) {
  * The key this file uses in allLoadedFiles map.
  */
 class RandomAccessIdb extends EventEmitter {
-    length;
-
     constructor({ready, fileName, chunkSize}) {
         super();
-        this.ready = () => ready;
-        this.fileName = fileName
-        this.chunkSize = chunkSize;
+        this.ready = ready;
         this.suspended = false;
         this.opened = false;
         this.closed = true;
+        this.meta = {
+            fileName,
+            chunkSize,
+            length: 0
+        };
         this._startQ();
     }
 
-    async refreshLength() {
-        const meta = await getMetaOfFile(this.fileName);
-        this.length = meta.length;
+    get fileName() {
+        return this.meta.fileName;
+    }
+
+    get length() {
+        // console.log("Retrieved length", this.meta);
+        return this.meta.length || 0;
+    }
+
+    get chunkSize() {
+        return this.meta.chunkSize;
+    }
+
+    async getMeta() {
+        const storedMeta = await getMetaOfFile(this.fileName) || {};
+        this.meta = {...this.meta, ...storedMeta};
+
+    }
+
+    async saveMeta() {
+        return setMetaOfFile(
+            this.meta
+        );
     }
 
     async setLength(length) {
-        this.length = length;
-        return setMetaOfFile({
-            fileName: this.fileName,
-            length,
-            chunkSize: this.chunkSize
-        });
-    }
-
-    async ensureChunkSize() {
-        const meta = await getMetaOfFile(this.fileName);
-        if (meta && meta.chunkSize) this.chunkSize = meta.chunkSize;
+        this.meta.length = length;
+        // console.log("Setting length", length, this.meta);
+        return this.saveMeta();
     }
 
     _startQ() {
+        const self = this;
         if (this.queue) return;
         let timer, stallTimeout = 10000;
         this.queue ||= Q(
             async ({task, request}) => {
                 try {
+                    // Needs to run each time, to ensure we have any updates
+                    // from other processes/tabs.
+                    if (!self.opened) {
+                        await self.__open;
+                    }
                     timer = setTimeout(() => {
                         console.error("The queue stalled", {task, request});
                     }, stallTimeout);
                     const result = await Promise.resolve(task());
                     if (request.callback) await request.callback(null, result);
+                    return result;
                 } catch (e) {
                     if (request.callback) return request.callback(e);
                     throw e;
@@ -299,32 +310,32 @@ class RandomAccessIdb extends EventEmitter {
             }
         });
         await delMetaOfFile(self.fileName);
+        await this.close();
         cb?.();
     }
 
     _blocks(i, j) {
-        const {
-            chunkSize
-        } = this;
-        return blocks(chunkSize, i, j)
+        return blocks(this.chunkSize, i, j)
     }
 
     async __open() {
         // Due to the way indexeddb can potentially operate across
         // multiple tabs, and be closed at any moment notice open is
         // called pretty much every op.
-        this.db = await this.ready();
-        await this.ensureChunkSize();
-        await this.refreshLength();
-        if (this.suspended) {
-            this.emit("unsuspend");
-            this.suspended = false;
-            this.queue.resume();
+        const self = this;
+        // Need to detect when the db closes unexpectedly.
+        if (this.opened && !this.closed && !this.suspended) return;
+        self.db = await self.ready();
+        await self.getMeta();
+        if (self.suspended) {
+            self.emit("unsuspend");
+            self.suspended = false;
+            self.queue.resume();
         }
-        if (!this.opened)
-            this.emit("open", this);
-        this.closed = false;
-        this.opened = true;
+        if (!self.opened)
+            self.emit("open", this);
+        self.closed = false;
+        self.opened = true;
     }
 
     open(cb = noop) {
@@ -340,8 +351,6 @@ class RandomAccessIdb extends EventEmitter {
                         callback: cb
                     },
                     async task() {
-                        // console.log("reading", self.fileName);
-
                         if (size === 0) return b4a.alloc(0);
 
                         const {
@@ -354,10 +363,9 @@ class RandomAccessIdb extends EventEmitter {
                             throw error;
                         }
                         if (size === Number.POSITIVE_INFINITY) size = length - offset;
-                        // if ((length || 0) < offset + size) {
-                        //     console.error(req, self.fileName);
-                        //     throw new Error('Could not satisfy length ');
-                        // }
+                        if ((length || 0) < offset + size) {
+                            throw new Error('Could not satisfy length ');
+                        }
                         const blocks = self._blocks(offset, offset + size);
                         const [{block: firstBlock}] = blocks;
                         const {block: lastBlock} = blocks[blocks.length - 1];
@@ -380,8 +388,7 @@ class RandomAccessIdb extends EventEmitter {
                             const {start, end} = blocks[cursor];
                             map[cursor] = b4a.from(data.slice(start, end));
                         }
-                        // console.log("read", map);
-                        return b4a.concat(map);
+                        return b4a.from(b4a.concat(map))
                     }
                 }
             )
@@ -389,17 +396,15 @@ class RandomAccessIdb extends EventEmitter {
     }
 
     write(offset, data, cb = noop) {
+        const self = this;
         this.open(() => {
-
-            const self = this;
-            const {
-                chunkSize, length, db
-            } = self;
-
             self.queue.push({
                 request: {callback: cb},
                 async task() {
-                    // console.log("writing", self.fileName);
+                    const {
+                        chunkSize, length, db
+                    } = self;
+
                     const blocks = self._blocks(offset, offset + data.length);
                     const [{block: firstBlock}] = blocks;
                     const {block: lastBlock} = blocks[blocks.length - 1];
@@ -440,16 +445,14 @@ class RandomAccessIdb extends EventEmitter {
                     return null;
                 }
             });
-
         });
-
     }
 
     del(offset, size, cb = noop) {
         const self = this;
         this.open(() => {
             const {
-                length, db, chunkSize
+                length
             } = self;
 
             if (size === Number.POSITIVE_INFINITY) size = length - offset;
@@ -467,14 +470,15 @@ class RandomAccessIdb extends EventEmitter {
                         callback: cb
                     },
                     async task() {
-                        // console.log("deleting", self.fileName);
+                        const {
+                            db, chunkSize
+                        } = self;
                         const blocks = self._blocks(offset, offset + size);
                         const firstBlock = blocks.shift();
                         const lastBlock = blocks.pop() || firstBlock;
                         const deleteBlockCount = lastBlock.block - firstBlock.block;
 
                         if (deleteBlockCount > 1) {
-                            // Delete anything in between.
                             await getChunks(db, {
                                 start: firstBlock.block,
                                 end: lastBlock.block
@@ -518,30 +522,30 @@ class RandomAccessIdb extends EventEmitter {
 
     truncate(offset, cb = noop) {
         const self = this;
-
-        const {
-            length, chunkSize, db
-        } = self
-
-        if (offset === length) {
-            // nothing
-            return cb(null, null);
-        } else if (offset > length) {
-            // grow
-            // console.log("growing", self.fileName);
-            return this.write(length, b4a.alloc(offset - length), (err) => {
-                if (err) return cb(err, null);
-                return cb(null, null);
-            });
-        }
-
         this.open(() => {
+            const {
+                length
+            } = self
+            if (offset === length) {
+                // nothing
+                return cb(null, null);
+            } else if (offset > length) {
+                // grow
+                // console.log("growing", self.fileName);
+                return self.write(length, b4a.alloc(offset - length), (err) => {
+                    if (err) return cb(err, null);
+                    return cb(null, null);
+                });
+            }
+
             self.queue.push({
                 request: {
                     callback: cb
                 },
                 async task() {
-                    // console.log("shrinking", self.fileName);
+                    const {
+                        length, chunkSize, db
+                    } = self;
                     // Shrink
                     const blocks = self._blocks(offset, length);
                     const [{block: firstBlock, start, end}] = blocks;
@@ -582,31 +586,35 @@ class RandomAccessIdb extends EventEmitter {
 
     stat(cb = noop) {
         const self = this;
-        this.open(() => {
-            getMetaOfFile(self.fileName).then(
-                stat => {
-                    cb(null, {
-                        ...stat, size: stat.length
-                    })
+        this.open((e) => {
+            if (e) return cb(e);
+            this.queue.push({
+                request: {callback: cb},
+                task() {
+                    return {
+                        fileName: self.fileName,
+                        length: self.length,
+                        size: self.length,
+                        chunkSize: self.chunkSize,
+                        blksize: self.chunkSize
+                    };
                 }
-            );
+            });
         });
     }
 
-    close(cb) {
+    close(cb = noop) {
         const self = this;
-        const {
-            fileName, db
-        } = this;
 
         this.open(() => {
             self.queue.push({
                 async task() {
-                    if (!self.closed) self.emit("close");
+                    if (!self.closed) self.emit("close")
+                    else return cb(null);
                     self.closed = true;
                     self.opened = false;
-                    db.close();
-                    allLoadedFiles.delete(fileName)
+                    self.db.close();
+                    allLoadedFiles.delete(self.fileName)
                 },
                 request: {
                     callback: cb
