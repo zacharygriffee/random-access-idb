@@ -367,6 +367,10 @@ class RandomAccessIdb extends EventEmitter {
                             throw new Error('Could not satisfy length ');
                         }
                         const blocks = self._blocks(offset, offset + size);
+                        // console.log("BLOCKS READ", blocks);
+                        if (!blocks.length) {
+                            throw new Error("Could not find blocks of specified: " + this.fileName)
+                        }
                         const [{block: firstBlock}] = blocks;
                         const {block: lastBlock} = blocks[blocks.length - 1];
 
@@ -406,6 +410,10 @@ class RandomAccessIdb extends EventEmitter {
                     } = self;
 
                     const blocks = self._blocks(offset, offset + data.length);
+                    // console.log("BLOCKS WRITE", blocks);
+                    if (!blocks.length) {
+                        throw new Error("Could not get chunks (" + offset + " - " + data.length + ")");
+                    }
                     const [{block: firstBlock}] = blocks;
                     const {block: lastBlock} = blocks[blocks.length - 1];
                     let newLength;
@@ -474,8 +482,16 @@ class RandomAccessIdb extends EventEmitter {
                             db, chunkSize
                         } = self;
                         const blocks = self._blocks(offset, offset + size);
+
+                        // console.log("BLOCKS DEL", blocks);
+                        if (!blocks.length) {
+                            throw new Error("No blocks found to delete."  + this.fileName);
+                        }
                         const firstBlock = blocks.shift();
                         const lastBlock = blocks.pop() || firstBlock;
+                        if (!firstBlock) {
+                            throw new Error("No blocks found to delete." + this.fileName);
+                        }
                         const deleteBlockCount = lastBlock.block - firstBlock.block;
 
                         if (deleteBlockCount > 1) {
@@ -546,8 +562,11 @@ class RandomAccessIdb extends EventEmitter {
                     const {
                         length, chunkSize, db
                     } = self;
+
+                    if (offset === length) return null;
                     // Shrink
                     const blocks = self._blocks(offset, length);
+                    // console.log("BLOCKS TRUNC", blocks, {offset, length, rai: self});
                     const [{block: firstBlock, start, end}] = blocks;
 
                     const [firstChunk, ...restChunks] = await getChunks(db, {

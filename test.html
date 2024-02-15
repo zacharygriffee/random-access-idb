@@ -24,8 +24,6 @@
                 "dht": "./dht-ws-client.dist.js"
             }
         }
-
-
 </script>
 <script type="module">
     import b4a from "b4a";
@@ -65,7 +63,7 @@
         });
     })
 
-    solo("replicate corestore test", {timeout: 600000}, async t => {
+    test("replicate corestore test", {timeout: 600000}, async t => {
         t.plan(1)
         // const cs1 = new Corestore(() => new RAM());
         const kp1 = DHT.keyPair(b4a.fill(b4a.alloc(32), "local"));
@@ -384,7 +382,6 @@
         const [bodyEle] = document.getElementsByTagName("body");
         bodyEle.style.backgroundColor = "green";
         t.pass();
-        localStorage.clear();
     });
 
 

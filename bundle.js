@@ -16,7 +16,8 @@ await pack("./index.js", "./dist/index.min.js", {
         banner() {
             return `
                 globalThis.process = {
-                    platform: "browser"
+                    platform: "browser",
+                    cwd: () => ""
                 };
             `;
         }
@@ -24,7 +25,7 @@ await pack("./index.js", "./dist/index.min.js", {
     plugins: [
         rollupFromSourcePlugin(projectFolder),
         commonjs(),
-        // terser()
+        terser()
     ]
 });
 
