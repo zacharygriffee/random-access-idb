@@ -5,18 +5,23 @@ import path from "tiny-paths";
 import {promise as Q} from "./lib/fastq.js";
 import EventEmitter from "tiny-emitter";
 
-const metaDb = await IDB.openDB("###meta", undefined, {
-    upgrade(db) {
-        const dataStore = db.createObjectStore('meta', {
-            keyPath: 'fileName',
-            autoIncrement: false,
-        });
+let metaDb;
+async function openMetaDatabase() {
+    return metaDb ||= await IDB.openDB("###meta", undefined, {
+        upgrade(db) {
+            const dataStore = db.createObjectStore('meta', {
+                keyPath: 'fileName',
+                autoIncrement: false,
+            });
 
-        dataStore.createIndex("length", "length");
-        dataStore.createIndex("type", "type");
-        dataStore.createIndex("chunkSize", "chunkSize");
-    }
-});
+            dataStore.createIndex("length", "length");
+            dataStore.createIndex("type", "type");
+            dataStore.createIndex("chunkSize", "chunkSize");
+        }
+    });
+}
+
+
 
 function delMetaOfFile(fileName) {
     const tx = metaDb.transaction("meta", "readwrite");
@@ -57,7 +62,7 @@ async function openFile(fileName, config = {}) {
         openBlockingHandler,
         openBlockedHandler
     } = config;
-    if (fileName === "######meta") {
+    if (fileName === "###meta") {
         throw new Error("Reserved db name");
     }
     return await IDB.openDB(fileName, undefined, {
