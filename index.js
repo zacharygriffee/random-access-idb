@@ -4,58 +4,7 @@ import * as IDB from "idb";
 import path from "tiny-paths";
 import {promise as Q} from "./lib/fastq.js";
 import EventEmitter from "tiny-emitter";
-
-let metaDb;
-async function openMetaDatabase() {
-    return metaDb ||= await IDB.openDB("###meta", undefined, {
-        upgrade(db) {
-            const dataStore = db.createObjectStore('meta', {
-                keyPath: 'fileName',
-                autoIncrement: false,
-            });
-
-            dataStore.createIndex("length", "length");
-            dataStore.createIndex("type", "type");
-            dataStore.createIndex("chunkSize", "chunkSize");
-        }
-    });
-}
-
-
-
-function delMetaOfFile(fileName) {
-    const tx = metaDb.transaction("meta", "readwrite");
-    const store = tx.objectStore('meta');
-    return store.delete(fileName).then(async (x) => {
-        await tx.done;
-        return x;
-    }).catch(e => {
-        console.log("Failed to del meta", e);
-        return false;
-    });
-}
-
-function getMetaOfFile(fileName) {
-    const tx = metaDb.transaction("meta", "readonly");
-    const store = tx.objectStore('meta');
-
-    return store.get(fileName).then(
-        async (result) => {
-            await tx.done
-            return result;
-        }
-    ).catch(e => {
-        console.log("Failed to get meta", e);
-        return false;
-    })
-}
-
-async function setMetaOfFile(meta) {
-    const tx = metaDb.transaction("meta", "readwrite");
-    const store = tx.objectStore("meta");
-    await store.put(meta);
-    return tx.done;
-}
+import {meta} from "./lib/metaDatabase.js";
 
 async function openFile(fileName, config = {}) {
     const {
@@ -255,13 +204,14 @@ class RandomAccessIdb extends EventEmitter {
     }
 
     async getMeta() {
-        const storedMeta = await getMetaOfFile(this.fileName) || {};
+        debugger;
+        const storedMeta = await meta.get(this.fileName) || {};
         this.meta = {...this.meta, ...storedMeta};
 
     }
 
     async saveMeta() {
-        return setMetaOfFile(
+        return meta.set(
             this.meta
         );
     }
@@ -314,7 +264,7 @@ class RandomAccessIdb extends EventEmitter {
                 if (self.deleteBlockingHandler) self.deleteBlockingHandler(...args);
             }
         });
-        await delMetaOfFile(self.fileName);
+        await meta.del(self.fileName);
         await this.close();
         cb?.();
     }
