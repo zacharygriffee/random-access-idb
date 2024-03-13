@@ -20,8 +20,7 @@
                 "fastq": "https://esm.run/fastq",
                 "tiny-paths": "https://esm.run/tiny-paths",
                 "BYOSU": "https://cdn.jsdelivr.net/npm/bring-your-own-storage-utilities@0.0.1310/dist/all.min.js",
-                "hyperswarm": "https://esm.run/hyperswarm",
-                "dht": "./dht-ws-client.dist.js"
+                "hyperswarm": "https://esm.run/hyperswarm"
             }
         }
 </script>
@@ -32,17 +31,7 @@
     import Hypercore from "hypercore";
     import Corestore from "corestore";
     import Hyperdrive from "hyperdrive";
-    import Hyperswarm from "hyperswarm";
-    import {RelayedDHT, WebSocketStream, DHT} from "dht"
-    // import RAM from "random-access-memory";
     import * as BYOSU from "BYOSU";
-
-    // const dht1 = new RelayedDHT(
-    //     new WebSocketStream(true, new WebSocket("ws://127.0.0.1:42001/hyper"))
-    // );
-    // const dht2 = new RelayedDHT(
-    //     new WebSocketStream(true, new WebSocket("ws://127.0.0.1:42001/hyper"))
-    // );
 
     const Buffer = b4a;
 
