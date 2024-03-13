@@ -19,7 +19,7 @@ npm test
 
 ## In Browser
 
-### [Test it in your browser](https://raw.githack.com/zacharygriffee/random-access-idb/master/test.html)
+### [Test it in your browser](https://rawcdn.githack.com/zacharygriffee/random-access-idb/b56419d7300f0982c6337bf90ad24ea681fe295c/test.html)
 
 ---
 
