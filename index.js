@@ -204,13 +204,14 @@ class RandomAccessIdb extends EventEmitter {
     }
 
     async getMeta() {
-        debugger;
-        const storedMeta = await meta.get(this.fileName) || {};
+        const _meta = await meta;
+        const storedMeta = await _meta.get(this.fileName) || {};
         this.meta = {...this.meta, ...storedMeta};
 
     }
 
     async saveMeta() {
+        const meta = await this.getMeta();
         return meta.set(
             this.meta
         );
@@ -258,6 +259,7 @@ class RandomAccessIdb extends EventEmitter {
      */
     async purge(cb) {
         const self = this;
+        const meta = await this.getMeta();
         await new Promise(resolve => self.close(resolve));
         await IDB.deleteDB(self.fileName, {
             blocked(...args) {
