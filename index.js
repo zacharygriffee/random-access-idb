@@ -129,8 +129,8 @@ class RandomAccessIdb extends EventEmitter {
 
             const length = this.meta.length;
             if (offset + size > length) {
-                const e = new Error(`ENOENT: no such file or directory, open '${this.fileName}'`);
-                e.code = "ENOENT";
+                const e = new Error(`Error: offset + size (${offset + size}) is greater than the file length (${length})`);
+                e.code = "EINVAL";
                 return cb(e);
             }
 
@@ -222,7 +222,6 @@ class RandomAccessIdb extends EventEmitter {
             try {
                 // Ensure any pending operations are completed
                 await this.ensureDBReady();
-                // Here you can perform any cleanup tasks if necessary
                 this.db = null;
                 this.meta = null;
                 this.queue = null; // Assuming the queue should also be cleared
