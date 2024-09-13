@@ -1,1 +1,0 @@
-console.log("Run test.html in browser");

@@ -1,609 +1,406 @@
-import {blocks} from "./lib/blocks.js";
-import b4a from "b4a";
-import * as IDB from "idb";
-import path from "tiny-paths";
-import {promise as Q} from "./lib/fastq.js";
-import EventEmitter from "tiny-emitter";
-import {meta} from "./lib/metaDatabase.js";
+import b4a from 'b4a';
+import * as IDB from 'idb';
+import { blocks } from './lib/blocks.js';
+import { metaManager } from './lib/MetaManager.js';
+import { QueueManager } from './lib/QueueManager.js';
+import EventEmitter from 'tiny-emitter';
 
-async function openFile(fileName, config = {}) {
-    const {
-        openBlockingHandler,
-        openBlockedHandler
-    } = config;
-    if (fileName === "###meta") {
-        throw new Error("Reserved db name");
-    }
-    return await IDB.openDB(fileName, undefined, {
-        upgrade(db) {
-            const dataStore = db.createObjectStore('chunks', {
-                // The 'id' property of the object will be the key.
-                keyPath: 'chunk',
-                // If it isn't explicitly set, create a value by auto incrementing.
-                autoIncrement: false,
-            });
-
-            dataStore.createIndex("data", "data");
-        },
-        blocking(currentVersion, blockedVersion, event) {
-            openBlockingHandler(currentVersion, blockedVersion, event);
-        },
-        blocked(...args) {
-            openBlockedHandler(...args);
-        }
-    });
-}
-
-async function getChunks(db, range = {}, inclusiveLow = true, inclusiveHigh = true) {
-    const tx = db.transaction("chunks", "readonly");
-    const store = tx.objectStore('chunks');
-
-    let keyRange;
-
-    if (range.end == null)
-        keyRange = IDBKeyRange.lowerBound(range.start, !inclusiveHigh);
-    else if (range.start == null)
-        keyRange = IDBKeyRange.upperBound(range.end, !inclusiveLow);
-    else if (range.start && range.end) {
-        keyRange = IDBKeyRange.bound(range.start, range.end, !inclusiveLow, !inclusiveHigh);
-    } else {
-        keyRange = undefined;
-    }
-
-    const results = await store.getAll(keyRange);
-    await tx.done;
-    return results;
-}
-
-async function setChunks(db, chunkBook = []) {
-    if (!Array.isArray(chunkBook)) chunkBook = [chunkBook];
-    const tx = db.transaction("chunks", "readwrite");
-    const store = tx.objectStore('chunks');
-    const promises = [];
-    for (const {chunk, data} of chunkBook) {
-        promises.push(
-            store.put(
-                {
-                    chunk,
-                    data
-                }
-            )
-        );
-    }
-    promises.push(tx.done);
-    await Promise.all(promises);
-}
-
-// todo: Error handling testing. Currently, unlikely
-//       indexeddb errors have not been tested
-/**
- * Current default configurations.
- * @type {{chunkSize: number, MapClass: MapConstructor, dbSeparator: string}}
- */
-export let defaultConfig = {
-    chunkSize: 4096, MapClass: Map
-};
-
-/**
- * Update default configurations for all further database creations.
- *
- * @example
- * updateDefaultConfig(existingConfig => ({...existingConfig, chunkSize: 1024, MapClass: ObservableMap}));
- *
- * @param cb
- * @returns {Promise<void>}
- */
-export function updateDefaultConfig(cb) {
-    return Promise.resolve(cb(defaultConfig)).then((changedConfig) => {
-        defaultConfig = changedConfig;
-    })
-}
-
-/**
- * Get a map of all loaded files.
- */
-export let allLoadedFiles = null;
-
-/**
- * Create a random access idb instance
- *
- * @example // File creation example
- *
- * const rai = createFile("helloWorld.txt");
- * rai.write(0, Buffer.from("hello world!!!"));
- *
- * @param [fileName] The name of the file
- * @param [config] Optional configurations
- * @param [config.chunkSize=4096] The chunk size of the files created from the created database.
- * Chunk size will be stored in the file's metadata and used for the next open.
- * @param [config.size=4096] Alias of {@link config.chunkSize}
- * @param [config.openBlockingHandler] Handler in the case that another tab, process, or part of the code tries to open
- * the same file. Default behavior is to close if this instance blocks another instance
- * @param [config.openBlockedHandler] If this instance encounters a block by another instance (tab, process, etc), how
- * to handle it. Default, does nothing and waits for the other process to close the file.
- * @param [config.deleteBlockingHandler] In the case where this instance wants to delete (purge) the file, but is blocked
- * by another instance operating on it. Default behavior is to do nothing and wait.
- * @param [config.MapClass] A custom map class to use for file listing instead of the native map class. Default is native map class.
- * @param [config.directory] Put the files into directory.
- * @returns Function<RandomAccessIdb>
- */
-function createFile(fileName, config = {}) {
-    const {
-        size,
-        chunkSize = size,
-        MapClass,
-        openBlockingHandler = (currVer, blockedVer, event) => {
-            console.warn("Closed due to blocking.", fileName);
-            allLoadedFiles.get(fileName)?.close();
-            return event.target.close();
-        },
-        openBlockedHandler,
-        deleteBlockingHandler,
-        prefix,
-        directory = prefix
-    } = ({...defaultConfig, ...config});
-    if (directory) fileName = path.join(directory, path.resolve('/', fileName).replace(/^\w+:\\/, ''))
-    if (!allLoadedFiles) allLoadedFiles = new MapClass();
-    if (allLoadedFiles.has(fileName)) {
-        const ras = allLoadedFiles.get(fileName);
-        if (ras.closed) {
-            delete allLoadedFiles.delete(fileName);
-        } else {
-            return ras;
-        }
-    }
-
-    config.chunkSize ||= chunkSize;
-    const ready = () => openFile(fileName, {openBlockingHandler, openBlockedHandler, ...config});
-
-    const ras = new RandomAccessIdb({ready, fileName, ...config});
-    ras.deleteBlockingHandler = deleteBlockingHandler;
-    allLoadedFiles.set(fileName, ras);
-    return ras;
-}
-
-/**
- * @class RandomAccessIdb
- * @extends RandomAccessStorage
- * @see https://github.com/random-access-storage/random-access-storage
- * @property {Number} length
- * Total length of the file
- * @property {String} fileName
- * The fileName of the file
- * @property {number} chunkSize
- * The chunk size this file is stored on the database.
- * @property {string} key
- * The key this file uses in allLoadedFiles map.
- */
 class RandomAccessIdb extends EventEmitter {
-    constructor({ready, fileName, chunkSize}) {
+    constructor(fileName, config = {}) {
         super();
-        this.ready = ready;
+
+        // Set metadata and initialize properties
         this.suspended = false;
         this.opened = false;
         this.closed = true;
         this.meta = {
-            fileName,
-            chunkSize,
-            length: 0
+            chunkSize: 4096,
+            ...config,
+            fileName, // Default chunk size
+            length: 0,
         };
-        this._startQ();
+        this.queue = new QueueManager();  // QueueManager for sequential task handling
+        this.metaManager = metaManager;  // MetaManager for handling metadata
+
+        // this._writeBlocks = this._writeBlocks.bind(this); // Bind the method for consistent access
+        this._initializeDB();  // Initialize the database connection immediately
+    }
+
+    // Ensure that the database is initialized only once
+    async _initializeDB() {
+        if (this.db && this.opened && !this.closed) {
+            // console.log('Database is already initialized and open.');
+            return;  // Exit if the database is already initialized and open
+        }
+
+        try {
+            this.db = await openFile(this.fileName, { chunkSize: this.chunkSize });
+            // console.log(`Database for file ${this.fileName} opened successfully.`);
+            const meta = await this.metaManager.get(this.fileName);
+            this.meta = meta || { fileName: this.fileName, chunkSize: this.chunkSize, length: 0 };
+            this.opened = true;
+            this.closed = false;
+        } catch (err) {
+            // console.error(`Failed to open database for ${this.fileName}:`, err);
+        }
+    }
+
+    async ready() {
+        if (!this.opened) {
+            await this._initializeDB();
+        }
+    }
+
+    async ensureDBReady() {
+        if (!this.opened || this.closed) {
+            await this._initializeDB();  // Initialize if the database is not open
+        }
+
+        // Check if the database has been purged or closed
+        if (!this.db) {
+            // console.warn('Database has been purged. Reinitializing as a new file.');
+            await this._initializeDB();  // Reinitialize if the database was purged
+        }
     }
 
     get fileName() {
         return this.meta.fileName;
     }
 
-    get length() {
-        // console.log("Retrieved length", this.meta);
-        return this.meta.length || 0;
-    }
-
     get chunkSize() {
         return this.meta.chunkSize;
     }
 
-    async getMeta() {
-        const _meta = await meta;
-        const storedMeta = await _meta.get(this.fileName) || {};
-        this.meta = {...this.meta, ...storedMeta};
-
+    get length() {
+        return this.meta.length;
     }
 
-    async saveMeta() {
-        const meta = await this.getMeta();
-        return meta.set(
-            this.meta
-        );
+    get paused() {
+        return this.queue.isPaused;
     }
 
-    async setLength(length) {
-        this.meta.length = length;
-        // console.log("Setting length", length, this.meta);
-        return this.saveMeta();
-    }
-
-    _startQ() {
-        const self = this;
-        if (this.queue) return;
-        let timer, stallTimeout = 10000;
-        this.queue ||= Q(
-            async ({task, request}) => {
-                try {
-                    // Needs to run each time, to ensure we have any updates
-                    // from other processes/tabs.
-                    if (!self.opened) {
-                        await self.__open;
-                    }
-                    timer = setTimeout(() => {
-                        console.error("The queue stalled", {task, request});
-                    }, stallTimeout);
-                    const result = await Promise.resolve(task());
-                    if (request.callback) await request.callback(null, result);
-                    return result;
-                } catch (e) {
-                    if (request.callback) return request.callback(e);
-                    throw e;
-                } finally {
-                    if (timer) clearTimeout(timer);
-                }
-            }, 1
-        );
-    }
-
-    /**
-     * Purge the file from the table.
-     * 'Closes' the file from allFilesOpened map.
-     *
-     * @param cb (error) => {}
-     */
-    async purge(cb) {
-        const self = this;
-        const meta = await this.getMeta();
-        await new Promise(resolve => self.close(resolve));
-        await IDB.deleteDB(self.fileName, {
-            blocked(...args) {
-                if (self.deleteBlockingHandler) self.deleteBlockingHandler(...args);
-            }
-        });
-        await meta.del(self.fileName);
-        await this.close();
-        cb?.();
-    }
-
-    _blocks(i, j) {
-        return blocks(this.chunkSize, i, j)
-    }
-
-    async __open() {
-        // Due to the way indexeddb can potentially operate across
-        // multiple tabs, and be closed at any moment notice open is
-        // called pretty much every op.
-        const self = this;
-        // Need to detect when the db closes unexpectedly.
-        if (this.opened && !this.closed && !this.suspended) return;
-        self.db = await self.ready();
-        await self.getMeta();
-        if (self.suspended) {
-            self.emit("unsuspend");
-            self.suspended = false;
-            self.queue.resume();
-        }
-        if (!self.opened)
-            self.emit("open", this);
-        self.closed = false;
-        self.opened = true;
-    }
-
-    open(cb = noop) {
-        this.__open().then(cb);
-    }
-
-    read(offset, size, cb = noop) {
-        const self = this;
-        this.open(() => {
-            self.queue.push(
-                {
-                    request: {
-                        callback: cb
-                    },
-                    async task() {
-                        if (size === 0) return b4a.alloc(0);
-
-                        const {
-                            db, length
-                        } = self;
-
-                        if (length === 0) {
-                            const error = new Error("No file");
-                            error.code = "ENOENT";
-                            throw error;
-                        }
-                        if (size === Number.POSITIVE_INFINITY) size = length - offset;
-                        if ((length || 0) < offset + size) {
-                            throw new Error('Could not satisfy length ');
-                        }
-                        const blocks = self._blocks(offset, offset + size);
-                        // console.log("BLOCKS READ", blocks);
-                        if (!blocks.length) {
-                            throw new Error("Could not find blocks of specified: " + this.fileName)
-                        }
-                        const [{block: firstBlock}] = blocks;
-                        const {block: lastBlock} = blocks[blocks.length - 1];
-
-                        const chunks = await getChunks(db, {
-                            start: firstBlock,
-                            end: lastBlock
-                        }, true, true);
-
-                        if (!chunks.length) return b4a.alloc(0);
-
-                        let cursor = 0;
-
-                        const map = [];
-                        for (const {data, chunk} of Object.values(chunks)) {
-                            cursor = chunk - firstBlock;
-                            if (!blocks[cursor]) {
-                                continue;
-                            }
-                            const {start, end} = blocks[cursor];
-                            map[cursor] = b4a.from(data.slice(start, end));
-                        }
-                        return b4a.from(b4a.concat(map))
-                    }
-                }
-            )
-        });
-    }
-
-    write(offset, data, cb = noop) {
-        const self = this;
-        this.open(() => {
-            self.queue.push({
-                request: {callback: cb},
-                async task() {
-                    const {
-                        chunkSize, length, db
-                    } = self;
-
-                    const blocks = self._blocks(offset, offset + data.length);
-                    // console.log("BLOCKS WRITE", blocks);
-                    if (!blocks.length) {
-                        throw new Error("Could not get chunks (" + offset + " - " + data.length + ")");
-                    }
-                    const [{block: firstBlock}] = blocks;
-                    const {block: lastBlock} = blocks[blocks.length - 1];
-                    let newLength;
-
-                    const chunks = await getChunks(db, {
-                        start: firstBlock,
-                        end: lastBlock
-                    }, true, true);
-
-                    for (let [key, value] of Object.entries(chunks)) {
-                        chunks[key] = value?.data;
-                    }
-
-                    let cursor = 0;
-                    let i = 0;
-
-                    const tx = db.transaction("chunks", "readwrite");
-                    const store = tx.objectStore('chunks');
-
-                    for (const {block, start, end} of blocks) {
-                        const blockPos = i++;
-                        const blockRange = end - start;
-
-                        if (blockRange === chunkSize) {
-                            chunks[blockPos] = b4a.from(data.slice(cursor, cursor + blockRange));
-                        } else {
-                            chunks[blockPos] ||= b4a.from(b4a.alloc(chunkSize));
-                            b4a.copy(b4a.from(data), chunks[blockPos], start, cursor, cursor + blockRange);
-                        }
-                        await store.put({chunk: block, data: b4a.from(chunks[blockPos])});
-                        cursor += blockRange;
-                    }
-
-                    newLength = Math.max(length || 0, offset + data.length);
-                    await tx.done;
-                    await self.setLength(newLength);
-                    return null;
-                }
-            });
-        });
-    }
-
-    del(offset, size, cb = noop) {
-        const self = this;
-        this.open(() => {
-            const {
-                length
-            } = self;
-
-            if (size === Number.POSITIVE_INFINITY) size = length - offset;
-
-            if (offset + size > length) {
-                size = Math.max(0, length - offset)
-            }
-            if (offset + size >= length) {
-                return self.truncate(offset, cb);
-            }
-
-            self.queue.push(
-                {
-                    request: {
-                        callback: cb
-                    },
-                    async task() {
-                        const {
-                            db, chunkSize
-                        } = self;
-                        const blocks = self._blocks(offset, offset + size);
-
-                        // console.log("BLOCKS DEL", blocks);
-                        if (!blocks.length) {
-                            throw new Error("No blocks found to delete."  + this.fileName);
-                        }
-                        const firstBlock = blocks.shift();
-                        const lastBlock = blocks.pop() || firstBlock;
-                        if (!firstBlock) {
-                            throw new Error("No blocks found to delete." + this.fileName);
-                        }
-                        const deleteBlockCount = lastBlock.block - firstBlock.block;
-
-                        if (deleteBlockCount > 1) {
-                            await getChunks(db, {
-                                start: firstBlock.block,
-                                end: lastBlock.block
-                            }, false, false);
-                        }
-
-                        const {0: first, 1: last} = await getChunks(db, {
-                            start: firstBlock.block,
-                            end: lastBlock.block
-                        }, true, true);
-
-
-                        if (first) {
-                            const end = last ? firstBlock.end : firstBlock.end - firstBlock.start;
-                            const empty = b4a.alloc(end);
-                            b4a.copy(empty, first.data, firstBlock.start);
-                            await setChunks(db, first);
-                        }
-
-                        if (last) {
-                            const end = Math.min(lastBlock.end, chunkSize);
-                            const empty = b4a.alloc(end);
-                            b4a.copy(empty, last.data, lastBlock.start);
-                            await setChunks(db, last);
-                        }
-                    }
-                }
-            );
-        });
-    }
-
-    suspend(cb) {
-        const self = this;
-        this.queue.pause();
-        this.suspended = true;
-        setTimeout(() => {
-            self.emit("suspend");
-            cb();
-        });
-    }
-
-    truncate(offset, cb = noop) {
-        const self = this;
-        this.open(() => {
-            const {
-                length
-            } = self
-            if (offset === length) {
-                // nothing
-                return cb(null, null);
-            } else if (offset > length) {
-                // grow
-                // console.log("growing", self.fileName);
-                return self.write(length, b4a.alloc(offset - length), (err) => {
-                    if (err) return cb(err, null);
-                    return cb(null, null);
-                });
-            }
-
-            self.queue.push({
-                request: {
-                    callback: cb
-                },
-                async task() {
-                    const {
-                        length, chunkSize, db
-                    } = self;
-
-                    if (offset === length) return null;
-                    // Shrink
-                    const blocks = self._blocks(offset, length);
-                    // console.log("BLOCKS TRUNC", blocks, {offset, length, rai: self});
-                    const [{block: firstBlock, start, end}] = blocks;
-
-                    const [firstChunk, ...restChunks] = await getChunks(db, {
-                        start: firstBlock
-                    }, true);
-                    const tx = db.transaction("chunks", "readwrite");
-                    const store = tx.objectStore('chunks');
-                    if (restChunks.length > 0) {
-                        const ops = [];
-                        for (const chunk of restChunks) {
-                            ops.push(
-                                store.delete(chunk.chunk)
-                            );
-                        }
-                        await Promise.all(ops);
-                    }
-
-                    const blockRange = end - start;
-                    if (blockRange === chunkSize) {
-                        await store.delete(firstBlock);
-                    } else {
-                        let {data, chunk} = firstChunk;
-                        let truncatedData = b4a.alloc(blockRange);
-                        b4a.copy(truncatedData, data, start, start, blockRange)
-                        await store.put({
-                            chunk, data
-                        });
-                    }
-                    await tx.done;
-                    await self.setLength(offset);
-                    return null;
-                }
+    // Open the database and load metadata
+    open(cb = () => {}) {
+        this.ready()
+            .then(async (db) => {
+                this.db = db;
+                const meta = await metaManager.get(this.fileName);  // Retrieve metadata for this file
+                this.meta = meta || { fileName: this.fileName, chunkSize: this.chunkSize, length: 0 };  // Default meta if null
+                this.opened = true;
+                this.closed = false;
+                cb(null);
             })
-        });
+            .catch(err => cb(err));
     }
 
-    stat(cb = noop) {
-        const self = this;
-        this.open((e) => {
-            if (e) return cb(e);
-            this.queue.push({
-                request: {callback: cb},
-                task() {
-                    return {
-                        fileName: self.fileName,
-                        length: self.length,
-                        size: self.length,
-                        chunkSize: self.chunkSize,
-                        blksize: self.chunkSize
-                    };
-                }
-            });
-        });
+    write(offset, data, cb = () => {}) {
+        this.queue.addTask(async () => {
+            await this.ensureDBReady();
+
+            const blocks = this._blocks(offset, offset + data.length);
+            const db = this.db;
+            const tx = db.transaction('chunks', 'readwrite');
+            const store = tx.objectStore('chunks');
+
+            let cursor = 0;
+
+            for (const { block, start, end } of blocks) {
+                const chunk = await store.get(block) || { data: b4a.alloc(this.chunkSize) };
+                const chunkDataLength = end - start;
+                b4a.copy(b4a.from(data), chunk.data, start, cursor, cursor + chunkDataLength);
+
+                await store.put({ chunk: block, data: chunk.data });
+                cursor += chunkDataLength;
+            }
+
+            await tx.done;
+
+            const newLength = Math.max(this.meta.length, offset + data.length);
+            this.meta.length = newLength;
+            await this.metaManager.set(this.meta);
+
+            cb(null);
+        }).catch(cb);
     }
 
-    close(cb = noop) {
-        const self = this;
+    read(offset, size, cb = () => {}) {
+        this.queue.addTask(async () => {
+            await this.ensureDBReady();
 
-        this.open(() => {
-            self.queue.push({
-                async task() {
-                    if (!self.closed) self.emit("close")
-                    else return cb(null);
-                    self.closed = true;
-                    self.opened = false;
-                    self.db.close();
-                    allLoadedFiles.delete(self.fileName)
-                },
-                request: {
-                    callback: cb
+            const length = this.meta.length;
+            if (offset + size > length) {
+                const e = new Error(`ENOENT: no such file or directory, open '${this.fileName}'`);
+                e.code = "ENOENT";
+                return cb(e);
+            }
+
+            const blocks = this._blocks(offset, offset + size);
+            const db = this.db;
+            const tx = db.transaction('chunks', 'readonly');
+            const store = tx.objectStore('chunks');
+            const result = [];
+
+            for (const { block, start, end } of blocks) {
+                const chunk = await store.get(block);
+                if (chunk && chunk.data) {
+                    result.push(chunk.data.slice(start, end));
+                } else {
+                    result.push(b4a.alloc(end - start, 0));
                 }
-            });
-        });
+            }
 
+            await tx.done;
+            const finalResult = result.length ? b4a.concat(result) : b4a.alloc(0);
+            cb(null, finalResult);
+        }).catch(cb);
+    }
+
+    del(offset, size, cb = () => {}) {
+        this.queue.addTask(async () => {
+            await this.ensureDBReady();
+
+            // Retrieve the latest metadata before performing the delete
+            const meta = await this.metaManager.get(this.fileName);
+            this.meta = meta || { fileName: this.fileName, chunkSize: this.chunkSize, length: 0 };
+
+            // console.log(`Current file length before deletion: ${this.meta.length}`);
+
+            if (size === Infinity) {
+                size = this.meta.length - offset;
+            }
+
+            if (offset >= this.meta.length || size <= 0) {
+                // console.warn(`Invalid range: offset ${offset}, size ${size}, length ${this.meta.length}`);
+                return cb(new Error('Invalid range for deletion'));
+            }
+
+            const endOffset = offset + size;
+
+            // If the deletion size plus offset reaches or exceeds the end of the file, defer to the truncate method
+            if (endOffset >= this.meta.length) {
+                // console.log(`Deferring deletion to truncate at offset ${offset}`);
+                return this.truncate(offset, cb);  // Call the truncate function to handle the shrinkage
+            }
+
+            // Proceed with the usual deletion and zero-filling logic
+            const blocks = this._blocks(offset, endOffset);
+            // console.log('Calculated blocks for deletion:', blocks);
+
+            const db = this.db;
+            const tx = db.transaction('chunks', 'readwrite');
+            const store = tx.objectStore('chunks');
+
+            const [{ block: firstBlock, start, end }] = blocks;
+            const chunk = await store.get(firstBlock);
+            if (chunk && chunk.data) {
+                const retainedData = chunk.data.slice(0, start);  // Retain the part before the deletion range
+                const zeroFill = b4a.alloc(end - start, 0);       // Zero-fill the deleted range
+                const remainingData = chunk.data.slice(end);      // Retain the part after the deletion range
+                const finalChunkData = b4a.concat([retainedData, zeroFill, remainingData]);  // Concatenate all parts
+
+                await store.put({ chunk: firstBlock, data: finalChunkData });
+            }
+
+            // Zero-fill the remaining blocks
+            for (const { block } of blocks.slice(1)) {
+                await store.put({ chunk: block, data: b4a.alloc(this.chunkSize) });
+            }
+
+            await tx.done;
+
+            const newLength = Math.max(this.meta.length, offset + size);
+            this.meta.length = newLength;
+            await this.metaManager.set(this.meta);  // Persist the updated metadata after deletion
+
+            // console.log(`Deletion complete. File length is now ${newLength}`);
+            cb(null);
+        }).catch(cb);
+    }
+
+    close(cb = () => {}) {
+        this.queue.addTask(async () => {
+            try {
+                // Ensure any pending operations are completed
+                await this.ensureDBReady();
+                // Here you can perform any cleanup tasks if necessary
+                this.db = null;
+                this.meta = null;
+                this.queue = null; // Assuming the queue should also be cleared
+                // console.log('File closed successfully');
+                this.emit('close');
+                cb(null);
+            } catch (error) {
+                // console.error('Error during close:', error.message);
+                cb(error);
+            }
+        }).catch(cb);
+    }
+
+    truncate(offset, cb = () => {}) {
+        this.queue.addTask(async () => {
+            await this.ensureDBReady();
+
+            const length = this.meta.length;
+
+            if (offset > length) {
+                // Expand the file by zero-padding the gap between the old and new length
+                return this.write(length, b4a.alloc(offset - length), cb);
+            }
+
+            const blocks = this._blocks(offset, length);
+            const db = this.db;
+            const tx = db.transaction('chunks', 'readwrite');
+            const store = tx.objectStore('chunks');
+
+            // Delete chunks beyond the truncation point
+            for (const { block } of blocks.slice(1)) {
+                await store.delete(block);
+            }
+
+            // Zero out remaining data up to the chunk boundary within the first block
+            const [{ block: firstBlock, start }] = blocks;
+            const chunk = await store.get(firstBlock);
+            if (chunk && chunk.data) {
+                const truncatedData = b4a.alloc(chunk.data.length);
+                b4a.copy(chunk.data, truncatedData, 0, 0, start);  // Retain data up to the truncation point
+                await store.put({ chunk: firstBlock, data: truncatedData });
+            }
+
+            await tx.done;
+
+            this.meta.length = offset;  // Update the file length after truncation
+            await this.metaManager.set(this.meta);
+
+            cb(null);
+        }).catch(cb);
+    }
+
+    // Retrieve file metadata
+    stat(cb = () => {}) {
+        this.queue.addTask(async () => {
+            await this.ensureDBReady();
+            let err;
+            // Check if the file metadata exists
+            if (!this.meta || !this.meta.fileName || this.meta.length === 0) {
+                err = new Error('File does not exist');
+                err.code = 'ENOENT';  // Attach ENOENT code
+                // console.error('Error in stat:', err.message);
+            }
+
+            // Return the file's stats (e.g., length, metadata)
+            const stats = {
+                length: this.meta.length,
+                size: this.meta.length,
+                chunkSize: this.meta.chunkSize,
+                fileName: this.meta.fileName
+            };
+
+            cb(err, stats);  // Successfully return stats
+        }).catch(cb);
+    }
+
+    suspend(cb = () => {}) {
+        this.queue.pauseQueue();
+        setTimeout(() => {
+            this.emit('suspend');
+            cb();
+        }, 0);
+    }
+
+    purge(cb = () => {}) {
+        this.queue.resumeQueue();
+        this.queue.addTask(async () => {
+            await this.ensureDBReady().catch(e => false);
+
+            try {
+                // console.log(`Purging file ${this.fileName}`);
+
+                // Delete the file from IndexedDB
+                await IDB.deleteDB(this.fileName);
+
+                // Delete the metadata associated with this file
+                await this.metaManager.del(this.fileName);
+
+                // Mark the database as purged by setting db to null
+                this.db = null;
+
+                // Reset the metadata specific to this file
+                this.meta = {fileName: this.fileName, chunkSize: this.chunkSize, length: 0};
+
+                // Remove the file from the allLoadedFiles map
+                allLoadedFiles.delete(this.fileName);
+                // console.log(`Removed ${this.fileName} from allLoadedFiles`);
+
+                // console.log(`Purge complete for file ${this.fileName}`);
+            } catch (e) {
+                cb(null);
+            }
+            cb(null);
+        }).catch(cb);  // Handle any errors
+    }
+
+    _blocks(start, end) {
+        return blocks(this.chunkSize, start, end);
     }
 }
 
-function noop() {
-    return () => null
+// Exported map for loaded files
+export const allLoadedFiles = new Map(); // Using the standard Map
+
+export async function openFile(fileName, config = {}) {
+    const {
+        openBlockingHandler = (currentVersion, blockedVersion, event) => {
+            // console.warn(`Database ${fileName} is blocking the upgrade (currentVersion: ${currentVersion}, blockedVersion: ${blockedVersion}). Closing this connection.`);
+            event.target.close();  // Automatically close the current connection
+        },
+        openBlockedHandler = (event) => {
+            // console.warn(`Database ${fileName} is blocked by an existing connection. Closing this connection.`);
+            event.target.close();  // Automatically close the current connection
+        }
+    } = config;
+
+    return await IDB.openDB(fileName, undefined, {
+        upgrade(db) {
+            const dataStore = db.createObjectStore('chunks', {
+                keyPath: 'chunk',
+                autoIncrement: false,
+            });
+
+            // Create indexes if needed
+            dataStore.createIndex('data', 'data');
+        },
+        blocking(currentVersion, blockedVersion, event) {
+            openBlockingHandler?.(currentVersion, blockedVersion, event);
+        },
+        blocked(...args) {
+            openBlockedHandler?.(...args);
+        }
+    });
+}
+
+export function createFile(fileName, config = {}) {
+    const { chunkSize = 4096, directory = '' } = config;
+
+    // Ensure the file name is adjusted if a directory is provided
+    if (directory) {
+        fileName = `${directory}/${fileName}`;
+    }
+
+    // Check if the file is already loaded
+    if (allLoadedFiles.has(fileName)) {
+        const ras = allLoadedFiles.get(fileName);
+        if (!ras.closed) {
+            return ras;  // Return the already loaded instance
+        } else {
+            allLoadedFiles.delete(fileName);  // If closed, remove it
+        }
+    }
+
+    // Create a new instance of RandomAccessIdb
+    const ras = new RandomAccessIdb(fileName, { chunkSize });
+    allLoadedFiles.set(fileName, ras);  // Store it in the map
+
+    return ras;
 }
 
 export default createFile;
-export {createFile};
