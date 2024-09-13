@@ -1,7 +1,8 @@
 import {solo, test, skip} from 'brittle';
 import b4a from 'b4a';
 import 'fake-indexeddb/auto';
-import defaultMaker, {allLoadedFiles, createFile} from '../index.js';
+import * as IDB from "idb";
+import defaultMaker, {allLoadedFiles, createFile, openFile} from '../index.js';
 import {newFile} from "./fixtures/newFile.js";
 import {promisify} from "./utils/promisify.js";
 
@@ -335,7 +336,7 @@ test("open purge, open purge", { skip: true }, async t => {
 test('purge deletes the file and resets metadata', async t => {
     t.plan(3);
     const fileName = 'purgeFile.txt';
-    const ras = createFile(fileName, { chunkSize: 1024 });
+    const ras = createFile(fileName, {chunkSize: 1024});
 
     const buffer = b4a.alloc(1024, 'A'); // 1KB of data
 
@@ -345,13 +346,10 @@ test('purge deletes the file and resets metadata', async t => {
     // Purge the file
     await promisify(ras, 'purge');
 
-    // Ensure that reading from the purged file throws an ENOENT error
-    try {
-        await promisify(ras, 'read', 0, 1024);
-        t.fail('Read should have failed after purging the file');
-    } catch (err) {
-        t.is(err.code, 'ENOENT', 'Read should fail with ENOENT after purging the file');
-    }
+    // Ensure that reading from the purged file returns zero buffer
+    const readAfterPurge = await promisify(ras, 'read', 0, 1024);
+    const zeroBuffer = b4a.alloc(1024, 0);
+    t.ok(b4a.equals(readAfterPurge, zeroBuffer), 'Reading from purged file should return zero buffer');
 
     // Ensure the metadata is reset after purging
     t.is(ras.meta.length, 0, 'File metadata should be reset after purging');
@@ -496,8 +494,10 @@ test('file purge deletes the file from IndexedDB', async t => {
     // Purge the file
     await promisify(ras, 'purge');
 
-    // Attempt to read from the purged file should fail
-    await t.exception(() => promisify(ras, 'read', 0, 9), 'File should be purged and inaccessible');
+    // Check if the file exists in IndexedDB by listing databases
+    const databases = await indexedDB.databases();
+    const fileExists = databases.some(db => db.name === fileName);
+    t.is(fileExists, false, 'File should not exist in IndexedDB after purge');
 
     // Check that the file is removed from allLoadedFiles
     t.is(allLoadedFiles.has(fileName), false, 'File should be removed from loaded files map');

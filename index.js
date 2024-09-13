@@ -128,10 +128,11 @@ class RandomAccessIdb extends EventEmitter {
             await this.ensureDBReady();
 
             const length = this.meta.length;
-            if (offset + size > length) {
-                const e = new Error(`Error: offset + size (${offset + size}) is greater than the file length (${length})`);
-                e.code = "EINVAL";
-                return cb(e);
+
+            if (length === 0) {
+                return cb(null, b4a.alloc(size - offset));
+            } else if (offset + size > length) {
+                return cb(new FileSystemError(`Error: offset + size (${offset + size}) is greater than the file length (${length})`, "EINVAL"));
             }
 
             const blocks = this._blocks(offset, offset + size);
@@ -281,9 +282,7 @@ class RandomAccessIdb extends EventEmitter {
             let err;
             // Check if the file metadata exists
             if (!this.meta || !this.meta.fileName || this.meta.length === 0) {
-                err = new Error('File does not exist');
-                err.code = 'ENOENT';  // Attach ENOENT code
-                // console.error('Error in stat:', err.message);
+                err = new FileSystemError(`File (${this.meta.fileName}) does not exist`, "ENOENT");
             }
 
             // Return the file's stats (e.g., length, metadata)
@@ -400,6 +399,13 @@ export function createFile(fileName, config = {}) {
     allLoadedFiles.set(fileName, ras);  // Store it in the map
 
     return ras;
+}
+
+class FileSystemError extends Error {
+    constructor(message, code) {
+        super(message);
+        this.code = code;
+    }
 }
 
 export default createFile;
