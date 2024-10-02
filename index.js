@@ -137,7 +137,7 @@ class RandomAccessIdb extends EventEmitter {
             if (length === 0) {
                 return cb(null, b4a.alloc(size - offset));
             } else if (offset + size > length) {
-                return cb(new FileSystemError(`Error: offset + size (${offset + size}) is greater than the file length (${length})`, "EINVAL"));
+                return cb(new FileSystemError(`Could not satisfy length. offset + size (${offset + size}) is greater than the file length (${length})`, "EINVAL"));
             }
 
             const blocks = this._blocks(offset, offset + size);
@@ -344,7 +344,7 @@ class RandomAccessIdb extends EventEmitter {
             // Check if the database exists
             const dbExists = await this._verifyDatabaseExists();
             if (!dbExists) {
-                console.warn(`Database ${this.fileName} does not exist, skipping purge.`);
+                // console.warn(`Database ${this.fileName} does not exist, skipping purge.`);
                 return cb(null);
             }
 
