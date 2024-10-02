@@ -52,6 +52,10 @@ class RandomAccessIdb extends EventEmitter {
     }
 
     async ensureDBReady() {
+        if (this.closing || this.purging) {
+            return;  // Don't reinitialize if closing or purging
+        }
+
         if (!this.opened || this.closed) {
             await this._initializeDB();  // Initialize if the database is not open
         }
@@ -64,6 +68,7 @@ class RandomAccessIdb extends EventEmitter {
     }
 
     get fileName() {
+        if (!this.meta) return null;
         return this.meta.fileName;
     }
 
@@ -219,22 +224,29 @@ class RandomAccessIdb extends EventEmitter {
     }
 
     close(cb = () => {}) {
-        this.queue.addTask(async () => {
+        // Check if the file is already closed
+        if (this.closed) {
+            console.warn('File is already closed.');
+            cb(null);
+            return;
+        }
+
+        // Add close task to the queue, waiting for all pending tasks
+        this.queue.waitUntilQueueEmpty().then(async () => {
             try {
-                // Ensure any pending operations are completed
-                await this.ensureDBReady();
+                // Clear the database connection and other resources
                 this.db = null;
-                this.meta = null;
-                this.queue = null; // Assuming the queue should also be cleared
-                // console.log('File closed successfully');
-                this.emit('close');
+                this.queue = {};  // Clearing queue to avoid further operations
+                this.closed = true; // Mark file as closed
+                console.log('File closed successfully');
                 cb(null);
             } catch (error) {
-                // console.error('Error during close:', error.message);
+                console.error('Error during close:', error.message);
                 cb(error);
             }
         }).catch(cb);
     }
+
 
     truncate(offset, cb = () => {}) {
         this.queue.addTask(async () => {
@@ -305,36 +317,70 @@ class RandomAccessIdb extends EventEmitter {
         }, 0);
     }
 
+// Updated purge method
+    async _verifyDatabaseExists() {
+        if (!('databases' in indexedDB)) {
+            console.warn('IndexedDB.databases() is not supported in this browser');
+            return true; // Assume it exists for browsers without support
+        }
+
+        const databases = await indexedDB.databases();
+        return databases.some(db => db.name === this.fileName);
+    }
+
     purge(cb = () => {}) {
-        this.queue.resumeQueue();
-        this.queue.addTask(async () => {
-            await this.ensureDBReady().catch(e => false);
+        if (this.closed) {
+            console.log('File already closed, purging directly');
+            this._performPurge(cb);
+        } else {
+            this.queue.waitUntilQueueEmpty()
+                .then(() => this._performPurge(cb))
+                .catch(cb);
+        }
+    }
 
-            try {
-                // console.log(`Purging file ${this.fileName}`);
-
-                // Delete the file from IndexedDB
-                await IDB.deleteDB(this.fileName);
-
-                // Delete the metadata associated with this file
-                await this.metaManager.del(this.fileName);
-
-                // Mark the database as purged by setting db to null
-                this.db = null;
-
-                // Reset the metadata specific to this file
-                this.meta = {fileName: this.fileName, chunkSize: this.chunkSize, length: 0};
-
-                // Remove the file from the allLoadedFiles map
-                allLoadedFiles.delete(this.fileName);
-                // console.log(`Removed ${this.fileName} from allLoadedFiles`);
-
-                // console.log(`Purge complete for file ${this.fileName}`);
-            } catch (e) {
-                cb(null);
+    async _performPurge(cb = () => {}) {
+        try {
+            // Check if the database exists
+            const dbExists = await this._verifyDatabaseExists();
+            if (!dbExists) {
+                console.warn(`Database ${this.fileName} does not exist, skipping purge.`);
+                return cb(null);
             }
+
+            console.log(`Purging file ${this.fileName}`);
+
+            // Delete the file from IndexedDB using idb library
+            await IDB.deleteDB(this.fileName);
+
+            // Verify the deletion
+            const isDeleted = !(await this._verifyDatabaseExists());
+            if (!isDeleted) {
+                throw new Error(`Failed to delete database: ${this.fileName}`);
+            }
+
+            // Delete the metadata associated with this file
+            await this.metaManager.del(this.fileName);
+
+            // Mark the database as purged by setting db to null
+            this.db = null;
+
+            // Reset the metadata specific to this file
+            this.meta = { fileName: this.fileName, chunkSize: this.chunkSize, length: 0 };
+
+            // Remove the file from the allLoadedFiles map
+            allLoadedFiles.delete(this.fileName);
+
+            console.log(`Purge complete for file ${this.fileName}`);
             cb(null);
-        }).catch(cb);  // Handle any errors
+        } catch (e) {
+            console.error(`Error during purge: ${e.message}`);
+            cb(e);
+        }
+    }
+
+    unlink(cb = () => {}) {
+        this.purge(cb);
     }
 
     _blocks(start, end) {

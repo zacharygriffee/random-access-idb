@@ -288,7 +288,7 @@ test('not sync', async function (t) {
 test('random access write and read', async function (t) {
     t.plan(8);
     const { file, close } = newFile();
-    t.teardown(close);
+    // t.teardown(close);
 
     file.write(10, b4a.from('hi'), function (err) {
         t.absent(err, 'no error');
@@ -356,6 +356,48 @@ test('purge deletes the file and resets metadata', async t => {
 
     // Ensure the database is recreated after purging
     t.ok(ras.db, 'Database connection should be recreated after purging');
+});
+
+
+test('open, close, then purge', async t => {
+    t.plan(3);
+
+    const fileName = 'testFile.txt';
+    const ras = createFile(fileName);
+
+    // Write some data to the file
+    await promisify(ras, 'write', 0, b4a.from('test data'));
+
+    // Close the file
+    await promisify(ras, 'close');
+    t.pass('File closed');
+
+    // Purge the file
+    await promisify(ras, 'purge');
+    t.pass('File purged');
+
+    // Verify that the file is removed from the allLoadedFiles map
+    t.is(allLoadedFiles.has(fileName), false, 'File should be removed from allLoadedFiles');
+});
+
+test('open, then purge', async t => {
+    t.plan(3);
+
+    const fileName = 'testFile.txt';
+    const ras = createFile(fileName);
+
+    // Write some data to the file
+    await promisify(ras, 'write', 0, b4a.from('test data'));
+
+    // Purge the file directly (which should close it first)
+    await promisify(ras, 'purge');
+    t.pass('File purged');
+
+    // Verify that the file is removed from the allLoadedFiles map
+    t.is(allLoadedFiles.has(fileName), false, 'File should be removed from allLoadedFiles');
+
+    // Ensure that trying to stat the file throws an error
+    await t.exception(() => promisify(ras, 'stat'), 'File should not exist after purge');
 });
 
 
