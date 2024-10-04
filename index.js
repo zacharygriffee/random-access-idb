@@ -62,10 +62,19 @@ class RandomAccessIdb extends EventEmitter {
 
         // Check if the database has been purged or closed
         if (!this.db) {
-            // console.warn('Database has been purged. Reinitializing as a new file.');
             await this._initializeDB();  // Reinitialize if the database was purged
         }
+
+        // Ensure metadata is properly set up with defaults
+        if (!this.meta || isNaN(this.meta.length)) {
+            this.meta = {
+                fileName: this.fileName,
+                chunkSize: this.chunkSize,
+                length: 0   // Ensure valid length
+            };
+        }
     }
+
 
     get fileName() {
         if (!this.meta) return null;
@@ -77,7 +86,11 @@ class RandomAccessIdb extends EventEmitter {
     }
 
     get length() {
-        return this.meta.length;
+        return this?.meta?.length || 0;
+    }
+
+    get size() {
+        return this?.meta?.length || 0;
     }
 
     get paused() {
@@ -102,18 +115,21 @@ class RandomAccessIdb extends EventEmitter {
         this.queue.addTask(async () => {
             await this.ensureDBReady();
 
+            // If metadata doesn't exist, initialize it with default values
+            if (!this.meta || isNaN(this.meta.length)) {
+                this.meta = { fileName: this.fileName, chunkSize: this.chunkSize, length: 0 };
+            }
+
             const blocks = this._blocks(offset, offset + data.length);
             const db = this.db;
             const tx = db.transaction('chunks', 'readwrite');
             const store = tx.objectStore('chunks');
 
             let cursor = 0;
-
             for (const { block, start, end } of blocks) {
                 const chunk = await store.get(block) || { data: b4a.alloc(this.chunkSize) };
                 const chunkDataLength = end - start;
                 b4a.copy(b4a.from(data), chunk.data, start, cursor, cursor + chunkDataLength);
-
                 await store.put({ chunk: block, data: chunk.data });
                 cursor += chunkDataLength;
             }
@@ -121,12 +137,13 @@ class RandomAccessIdb extends EventEmitter {
             await tx.done;
 
             const newLength = Math.max(this.meta.length, offset + data.length);
-            this.meta.length = newLength;
-            await this.metaManager.set(this.meta);
+            this.meta.length = isNaN(newLength) ? 0 : newLength;  // Sanitize length value
+            await this.metaManager.set(this.meta);  // Persist metadata
 
-            cb(null);
+            cb(null);  // Signal success
         }).catch(cb);
     }
+
 
     read(offset, size, cb = () => {}) {
         this.queue.addTask(async () => {
@@ -134,8 +151,9 @@ class RandomAccessIdb extends EventEmitter {
 
             const length = this.meta.length;
 
-            if (length === 0) {
-                return cb(null, b4a.alloc(size - offset));
+            // If the file doesn't exist, or it's empty, return a zero-byte buffer
+            if (length === 0 || !this.meta) {
+                return cb(null, b4a.alloc(size || 0)); // If 'size' is undefined, default to 0
             } else if (offset + size > length) {
                 return cb(new FileSystemError(`Could not satisfy length. offset + size (${offset + size}) is greater than the file length (${length})`, "EINVAL"));
             }
@@ -160,6 +178,7 @@ class RandomAccessIdb extends EventEmitter {
             cb(null, finalResult);
         }).catch(cb);
     }
+
 
     del(offset, size, cb = () => {}) {
         this.queue.addTask(async () => {
@@ -288,31 +307,46 @@ class RandomAccessIdb extends EventEmitter {
     }
 
     // Retrieve file metadata
+    // Retrieve file metadata
     stat(cb = () => {}) {
         this.queue.addTask(async () => {
             await this.ensureDBReady();
             let err;
-            // Check if the file metadata exists
-            if (!this.meta || !this.meta.fileName || this.meta.length === 0) {
-                err = new FileSystemError(`File (${this.meta.fileName}) does not exist`, "ENOENT");
+
+            // If meta doesn't exist, assume the file doesn't exist and throw ENOENT
+            const meta = await this.metaManager.get(this.fileName);
+            if (!meta || isNaN(meta.length)) {
+                err = new FileSystemError(`File (${this.fileName}) does not exist`, "ENOENT");
+
+                // Provide fallback stats with length 0 and no chunkSize
+                const fallbackStats = {
+                    length: 0,
+                    fileName: this.fileName
+                };
+
+                return cb(err, fallbackStats);  // Throw ENOENT but provide fallback stats
             }
 
-            // Return the file's stats (e.g., length, metadata)
+            // Sanitize length in case it is NaN (default it to 0)
+            meta.length = isNaN(meta.length) ? 0 : meta.length;
+
+            // Return actual stats if the file exists
             const stats = {
-                length: this.meta.length,
-                size: this.meta.length,
-                chunkSize: this.meta.chunkSize,
-                fileName: this.meta.fileName
+                length: meta.length,   // Ensure length is valid
+                size: meta.length,     // Provide the same value for size
+                chunkSize: meta.chunkSize || undefined,  // Only include chunkSize if available
+                fileName: meta.fileName
             };
 
-            cb(err, stats);  // Successfully return stats
+            cb(null, stats);  // Return valid stats with no error if the file exists
         }).catch(cb);
     }
+
 
     suspend(cb = () => {}) {
         this.queue.pauseQueue();
         setTimeout(() => {
-            this.emit('suspend');
+            this.emit('suspend'); 
             cb();
         }, 0);
     }
@@ -329,10 +363,12 @@ class RandomAccessIdb extends EventEmitter {
     }
 
     purge(cb = () => {}) {
+        // If the file is already closed, skip to the purge process directly
         if (this.closed) {
             console.log('File already closed, purging directly');
             this._performPurge(cb);
         } else {
+            // Otherwise, queue the purge operation to ensure all pending tasks complete
             this.queue.waitUntilQueueEmpty()
                 .then(() => this._performPurge(cb))
                 .catch(cb);
@@ -341,43 +377,39 @@ class RandomAccessIdb extends EventEmitter {
 
     async _performPurge(cb = () => {}) {
         try {
-            // Check if the database exists
             const dbExists = await this._verifyDatabaseExists();
-            if (!dbExists) {
-                // console.warn(`Database ${this.fileName} does not exist, skipping purge.`);
-                return cb(null);
+            if (dbExists) {
+                console.log(`Purging file ${this.fileName} from database`);
+
+                // Attempt to delete the database
+                await IDB.deleteDB(this.fileName);
+                const isDeleted = !(await this._verifyDatabaseExists());
+
+                if (!isDeleted) {
+                    console.warn(`Database ${this.fileName} may not have been deleted.`);
+                }
+            } else {
+                console.warn(`Database ${this.fileName} does not exist, skipping database deletion.`);
             }
 
-            console.log(`Purging file ${this.fileName}`);
-
-            // Delete the file from IndexedDB using idb library
-            await IDB.deleteDB(this.fileName);
-
-            // Verify the deletion
-            const isDeleted = !(await this._verifyDatabaseExists());
-            if (!isDeleted) {
-                throw new Error(`Failed to delete database: ${this.fileName}`);
-            }
-
-            // Delete the metadata associated with this file
+            // Purge the metadata (always attempt this)
             await this.metaManager.del(this.fileName);
+            this.db = null;  // Clear the database connection
+            this.meta = { fileName: this.fileName, chunkSize: this.chunkSize, length: 0 };  // Reset metadata
 
-            // Mark the database as purged by setting db to null
-            this.db = null;
-
-            // Reset the metadata specific to this file
-            this.meta = { fileName: this.fileName, chunkSize: this.chunkSize, length: 0 };
-
-            // Remove the file from the allLoadedFiles map
+            // Remove from loaded files
             allLoadedFiles.delete(this.fileName);
-
             console.log(`Purge complete for file ${this.fileName}`);
-            cb(null);
+
+            cb(null);  // Success callback
         } catch (e) {
             console.error(`Error during purge: ${e.message}`);
             cb(e);
         }
     }
+
+
+
 
     unlink(cb = () => {}) {
         this.purge(cb);

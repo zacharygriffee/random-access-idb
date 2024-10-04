@@ -565,17 +565,18 @@ test('stat retrieves file metadata', async t => {
     });
 });
 
-test('stat returns ENOENT if file length is 0', async t => {
-    t.plan(2);
-    const fileName = 'emptyStatFile.txt';
-    const ras = createFile(fileName, { chunkSize: 1024 });
-
-    // No data is written to the file, so length remains 0
-    ras.stat((err, stats) => {
-        t.is(err.code, 'ENOENT', 'Stat should return ENOENT error when file length is 0');
-        t.is(stats.length, 0, 'File length should be 0 when no data has been written');
-    });
-});
+// This behavior is no longer true. If meta exists then the file exists even if it is size=0
+// test('stat returns ENOENT if file length is 0', async t => {
+//     t.plan(2);
+//     const fileName = 'emptyStatFile.txt';
+//     const ras = createFile(fileName, { chunkSize: 1024 });
+//
+//     // No data is written to the file, so length remains 0
+//     ras.stat((err, stats) => {
+//         t.is(err.code, 'ENOENT', 'Stat should return ENOENT error when file length is 0');
+//         t.is(stats.length, 0, 'File length should be 0 when no data has been written');
+//     });
+// });
 
 test('suspend pauses the queue and emits suspend event', async t => {
     t.plan(2);

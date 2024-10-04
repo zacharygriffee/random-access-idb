@@ -1,4 +1,4 @@
-import {test} from 'brittle';
+import {solo, test} from 'brittle';
 import b4a from 'b4a';
 import 'fake-indexeddb/auto';
 import defaultMaker from '../index.js';
