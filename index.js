@@ -115,11 +115,12 @@ class RandomAccessIdb extends EventEmitter {
         this.queue.addTask(async () => {
             await this.ensureDBReady();
 
-            // If metadata doesn't exist, initialize it with default values
-            if (!this.meta || isNaN(this.meta.length)) {
+            // If metadata doesn't exist, initialize it
+            if (!this.meta) {
                 this.meta = { fileName: this.fileName, chunkSize: this.chunkSize, length: 0 };
             }
 
+            // Proceed with writing logic...
             const blocks = this._blocks(offset, offset + data.length);
             const db = this.db;
             const tx = db.transaction('chunks', 'readwrite');
@@ -137,12 +138,13 @@ class RandomAccessIdb extends EventEmitter {
             await tx.done;
 
             const newLength = Math.max(this.meta.length, offset + data.length);
-            this.meta.length = isNaN(newLength) ? 0 : newLength;  // Sanitize length value
+            this.meta.length = newLength;
             await this.metaManager.set(this.meta);  // Persist metadata
 
-            cb(null);  // Signal success
+            cb(null);  // Success
         }).catch(cb);
     }
+
 
 
     read(offset, size, cb = () => {}) {
@@ -379,17 +381,17 @@ class RandomAccessIdb extends EventEmitter {
         try {
             const dbExists = await this._verifyDatabaseExists();
             if (dbExists) {
-                console.log(`Purging file ${this.fileName} from database`);
+                // console.log(`Purging file ${this.fileName} from database`);
 
                 // Attempt to delete the database
                 await IDB.deleteDB(this.fileName);
                 const isDeleted = !(await this._verifyDatabaseExists());
 
                 if (!isDeleted) {
-                    console.warn(`Database ${this.fileName} may not have been deleted.`);
+                    // console.warn(`Database ${this.fileName} may not have been deleted.`);
                 }
             } else {
-                console.warn(`Database ${this.fileName} does not exist, skipping database deletion.`);
+                // console.warn(`Database ${this.fileName} does not exist, skipping database deletion.`);
             }
 
             // Purge the metadata (always attempt this)
@@ -399,7 +401,7 @@ class RandomAccessIdb extends EventEmitter {
 
             // Remove from loaded files
             allLoadedFiles.delete(this.fileName);
-            console.log(`Purge complete for file ${this.fileName}`);
+            // console.log(`Purge complete for file ${this.fileName}`);
 
             cb(null);  // Success callback
         } catch (e) {
