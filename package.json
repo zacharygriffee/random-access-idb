@@ -1,9 +1,8 @@
 {
   "name": "@zacharygriffee/random-access-idb",
   "type": "module",
-  "version": "4.1.11",
+  "version": "4.1.12",
   "main": "index.js",
-  "browser": "dist/index.min.js",
   "description": "A rework of random-access-idb",
   "homepage": "https://github.com/zacharygriffee/random-access-idb#readme",
   "license": "MIT",
