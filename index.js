@@ -281,6 +281,12 @@ class RandomAccessIdb extends EventEmitter {
             }
 
             const blocks = this._blocks(offset, length);
+            if (blocks.length === 0) {
+                // No blocks to truncate, just update metadata
+                this.meta.length = offset;
+                await this.metaManager.set(this.meta);
+                return cb(null);
+            }
             const db = this.db;
             const tx = db.transaction('chunks', 'readwrite');
             const store = tx.objectStore('chunks');

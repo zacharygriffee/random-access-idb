@@ -593,6 +593,92 @@ test('suspend pauses the queue and emits suspend event', async t => {
     });
 });
 
+test('truncate should expand the file to a larger offset', async (t) => {
+    const file = createFile('testExpandFile');
+    await file.ready();
+
+    const originalData = b4a.from('Hello World');
+    const newOffset = 4096 * 2; // Expand to 2 chunks (8KB)
+
+    // Write initial data
+    await new Promise((resolve, reject) => {
+        file.write(0, originalData, (err) => {
+            if (err) reject(err);
+            else resolve();
+        });
+    });
+
+    // Truncate to expand the file
+    await new Promise((resolve, reject) => {
+        file.truncate(newOffset, (err) => {
+            if (err) reject(err);
+            else resolve();
+        });
+    });
+
+    // Read from offset 0 to new length
+    const data = await new Promise((resolve, reject) => {
+        file.read(0, newOffset, (err, data) => {
+            if (err) reject(err);
+            else resolve(data);
+        });
+    });
+
+    t.is(data.length, newOffset, 'Data length should be equal to new offset');
+    t.alike(data.slice(0, originalData.length), originalData, 'Original data should be retained');
+
+    // Verify that the space between old length and new length is zero-filled
+    const padding = data.slice(originalData.length);
+    t.ok(padding.every((byte) => byte === 0), 'Padding should be zero-filled');
+
+    await file.purge();
+});
+
+test('truncate should shrink the file to a smaller offset', async (t) => {
+    const file = createFile('testShrinkFile');
+    await file.ready();
+
+    const originalData = b4a.from('Hello World');
+    const initialOffset = 4096 * 2;
+
+    // Write initial data to a larger offset
+    await new Promise((resolve, reject) => {
+        file.write(0, originalData, (err) => {
+            if (err) reject(err);
+            else resolve();
+        });
+    });
+
+    await new Promise((resolve, reject) => {
+        file.truncate(initialOffset, (err) => {
+            if (err) reject(err);
+            else resolve();
+        });
+    });
+
+    // Truncate to shrink the file
+    const shrinkOffset = 4096;
+    await new Promise((resolve, reject) => {
+        file.truncate(shrinkOffset, (err) => {
+            if (err) reject(err);
+            else resolve();
+        });
+    });
+
+    // Read from offset 0 to the new length
+    const data = await new Promise((resolve, reject) => {
+        file.read(0, shrinkOffset, (err, data) => {
+            if (err) reject(err);
+            else resolve(data);
+        });
+    });
+
+    t.is(data.length, shrinkOffset, 'Data length should be equal to shrink offset');
+    t.alike(data.slice(0, originalData.length), originalData, 'Original data up to shrink offset should be retained');
+    t.ok(data.slice(originalData.length).every((byte) => byte === 0), 'Remaining data should be zero-filled after truncation');
+    await file.purge();
+});
+
 // Fails as queue is not in order
 skip('suspend pauses the queue and allows resuming operations', async t => {
     t.plan(5);
